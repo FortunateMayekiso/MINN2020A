@@ -233,15 +233,15 @@ else:
                         
     elif selected_page == "Equipment Data":
         st.header("Equipment Data")
-        st.info("The equipment monitoring session still needs to be added")
+        st.info("The equipment monitoring session still needs to be added")  #add a code here
 
     elif selected_page == "Maintenance Data":
         st.header("Maintenance Data")
-        st.info("The maintenance section session still needs to be added")
+        st.info("The maintenance section session still needs to be added")  #add a code here
 
     elif selected_page == "Risk Assessment":
         st.header("Risk Assessment")
-        st.info("The Risk Assessment session still needs to be added") 
+        st.info("The Risk Assessment session still needs to be added")   #add a code here
             
     elif selected_page == "General Reports":
         st.header("General Reports")
