@@ -133,7 +133,7 @@ else:
         worker_id = st.text_input("Worker's ID")
         department = st.selectbox("Select Department", ["", "Community Relations", "Electrical Engineering", "Emergency Response", "Environmental Management", "Finance & Commercial", "Fixed Plant Maintenance", "Geology & Exploration", "Geotechnical Engineering", "Grade Control", "Human Resources & Payroll", "Mine Engineering", "Mine Surveying", "Mining Operations (Production)", "Mobile Equipment Maintenance", "Occupational Health & Safety", "Processing / Metallurgy", "Security", "Supply Chain & Logistics"])
         job_role = st.text_input("Job Role")
-        shift = st.selectbox("Select Shift", ["Day Shift", "Night Shift"])
+        shift = st.selectbox("Select Shift", ["", Day Shift", "Night Shift"])
         ppe = st.selectbox("Is the worker wearing full PPE?", ["", "Yes", "No"])
         training = st.selectbox("Has the worker recieved and completed safety training?", ["", "Yes", "No"])
         fatigue = st.number_input("Worker's Fatigue Level (1-10)", min_value=1, max_value=10)  ########Check this line again!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
