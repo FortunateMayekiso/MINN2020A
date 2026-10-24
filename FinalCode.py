@@ -4,6 +4,9 @@ import numpy as np
 import time
 import csv
 from datetime import date
+import os
+import plotly.graph_objects as go
+from datetime import date, timedelta
 
 
 #Page settings
@@ -233,110 +236,202 @@ else:
                         
     elif selected_page == "Equipment Data":
         st.info("The equipment monitoring session still needs to be added")
-        st.header("D. Equipment Database and E. Condition Monitoring")
-    tabs = st.tabs(["D: Register", "D: Equipment Records", "E: Check / Update Readings", "E: Charts"])
-    with tabs[0]:
-        with st.form("equipment_form", clear_on_submit=True):
-            eq_id = st.text_input("Equipment ID")
-            eq_type = st.selectbox("Equipment Type", EQUIPMENT_TYPES)
-            maker = st.text_input("Manufacturer")
-            operating = st.number_input("Operating Hours", min_value=0.0)
-            downtime = st.number_input("Downtime (hours)", min_value=0.0)
-            fuel = st.number_input("Fuel consumption (L/h)", min_value=0.0)
-            temp = st.number_input("Temperature (°C)", value=60.0)
-            vib = st.number_input("Vibration (mm/s)", value=2.0, min_value=0.0)
-            brakes = st.selectbox("Brake Status", PART_STATUSES)
-            tyres = st.selectbox("Tyre Status", PART_STATUSES)
-            engine = st.selectbox("Engine Status", PART_STATUSES)
-            maintenance = st.selectbox("Maintenance Status", MAINTENANCE_STATUSES)
-            last = st.date_input("Last Maintenance", value=date.today())
-            due = st.date_input("Next Maintenance Due", value=date.today() + timedelta(days=90))
-            submit = st.form_submit_button("Register Equipment")
+        st.header("Equipment Database and Condition Monitoring")
+        equipment_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "equipment.csv")
+        equipment_types = ["Haul Truck", "Loader", "Excavator", "Drilling Machine",
+                           "Bulldozer", "Scraper Winch", "Crusher", "Conveyor"]
+        part_statuses = ["Good", "Worn", "Faulty"]
+        maintenance_statuses = ["Operational", "Due for Maintenance", "Overdue", "Under Maintenance"]
+        columns = ["Equipment ID", "Equipment Type", "Manufacturer", "Operating Hours",
+                   "Temperature (C)", "Vibration (mm/s)", "Fuel Consumption (L/h)",
+                   "Brake Status", "Tyre Status", "Engine Status", "Maintenance Status",
+                   "Downtime (hours)", "Last Maintenance", "Next Maintenance Due", "Alert Count"]
+        numeric = ["Operating Hours", "Temperature (C)", "Vibration (mm/s)",
+                   "Fuel Consumption (L/h)", "Downtime (hours)", "Alert Count"]
 
-        if submit:
-            if not eq_id.strip() or not maker.strip():
-                st.error("Equipment ID and manufacturer are required.")
-            elif find_equipment(eq_id.strip()):
-                st.error("That equipment ID already exists.")
-            elif due < last:
-                st.error("Next maintenance due cannot be before last maintenance.")
+        # Accept the column names used in your earlier equipment CSV.
+        aliases = {"ID": "Equipment ID", "Type": "Equipment Type",
+                   "Operating time": "Operating Hours", "Temperature": "Temperature (C)",
+                   "Vibration": "Vibration (mm/s)", "Fuel": "Fuel Consumption (L/h)",
+                   "Brakes": "Brake Status", "Tyres": "Tyre Status", "Engine": "Engine Status",
+                   "Maintenance": "Maintenance Status", "Downtime": "Downtime (hours)",
+                   "Alerts": "Alert Count"}
+
+        # Load saved records once per session.
+        if "equipment" not in st.session_state:
+            try:
+                saved = pd.read_csv(equipment_file, keep_default_na=False, dtype=str)
+                st.session_state["equipment"] = saved.to_dict("records")
+            except (FileNotFoundError, pd.errors.EmptyDataError):
+                st.session_state["equipment"] = []
+
+        data = pd.DataFrame(st.session_state["equipment"])
+        for old, new in aliases.items():
+            if old in data.columns and new not in data.columns:
+                data[new] = data[old]
+        if "Operating Hours" not in data.columns and "Hours" in data.columns:
+            data["Operating Hours"] = data["Hours"]
+        for column in columns:
+            if column not in data.columns:
+                data[column] = 0 if column in numeric else ""
+        data[numeric] = data[numeric].apply(pd.to_numeric, errors="coerce").fillna(0)
+        data["Maintenance Status"] = data["Maintenance Status"].replace(
+            {"Normal": "Operational", "Due": "Due for Maintenance"})
+        st.session_state["equipment"] = data.to_dict("records")
+
+        def save_equipment():
+            saved = pd.DataFrame(st.session_state["equipment"])
+            for old, new in aliases.items():
+                if old in saved.columns:
+                    saved[old] = saved[new]
+            saved.to_csv(equipment_file, index=False)
+
+        # Example limits: temperature 80/100 C; vibration 5/8 mm/s.
+        def reading_status(value, warning, critical):
+            if value > critical:
+                return "Critical"
+            elif value >= warning:
+                return "Warning"
             else:
-                S["equipment"].append({
-                    "Equipment ID": eq_id.strip(), "Equipment Type": eq_type,
-                    "Manufacturer": maker.strip(), "Operating Hours": operating,
-                    "Temperature (C)": temp, "Vibration (mm/s)": vib,
-                    "Fuel Consumption (L/h)": fuel, "Brake Status": brakes,
-                    "Tyre Status": tyres, "Engine Status": engine,
-                    "Maintenance Status": maintenance, "Downtime (hours)": downtime,
-                    "Last Maintenance": str(last), "Next Maintenance Due": str(due),
-                    "Alert Count": sum(status != "Normal" for status in check_machine({
-                        "Temperature (C)": temp, "Vibration (mm/s)": vib}))
-                })
-                save_records("equipment")
-                st.success("Equipment saved to equipment.csv.")
+                return "Normal"
 
-    with tabs[1]:
-        data = equipment_table()
-        if data.empty:
-            st.info("No equipment recorded.")
-        else:
-            search = st.text_input("Search Equipment ID / Manufacturer")
-            eq_type = st.selectbox("Filter Equipment Type", ["All"] + EQUIPMENT_TYPES)
-            if eq_type != "All":
-                data = data[data["Equipment Type"] == eq_type]
-            if search:
-                mask = data["Equipment ID"].astype(str).str.contains(search, case=False, regex=False) | data["Manufacturer"].astype(str).str.contains(search, case=False, regex=False)
-                data = data[mask]
-            show_table(data)
+        def machine_condition(temp, vibration):
+            states = [reading_status(temp, 80, 100), reading_status(vibration, 5, 8)]
+            if "Critical" in states:
+                return "Critical"
+            elif "Warning" in states:
+                return "Warning"
+            else:
+                return "Normal"
 
-    with tabs[2]:
-        st.table(pd.DataFrame({
-            "Parameter": ["Temperature", "Vibration"],
-            "Normal": ["below 80 °C", "below 5 mm/s"],
-            "Warning": ["80–100 °C", "5–8 mm/s"],
-            "Critical": ["above 100 °C", "above 8 mm/s"]}))
-        
-        if S["equipment"]:
-            ids = [str(m["Equipment ID"]) for m in S["equipment"]]
-            eq_id = st.selectbox("Select equipment", ids)
-            machine = find_equipment(eq_id)
-            temp_status, vib_status = check_machine(machine)
-            st.write("Current temperature:", machine["Temperature (C)"], "°C —", temp_status)
-            st.write("Current vibration:", machine["Vibration (mm/s)"], "mm/s —", vib_status)
+        if "equipment_message" in st.session_state:
+            st.success(st.session_state.pop("equipment_message"))
 
-            with st.form("readings_form"):
-                new_temp = st.number_input("New temperature (°C)", value=number(machine["Temperature (C)"]))
-                new_vib = st.number_input("New vibration (mm/s)", value=number(machine["Vibration (mm/s)"]), min_value=0.0)
-                update = st.form_submit_button("Update readings")
-            if update:
-                machine["Temperature (C)"] = new_temp
-                machine["Vibration (mm/s)"] = new_vib
-                machine["Alert Count"] = int(number(machine["Alert Count"])) + sum(
-                    status != "Normal" for status in check_machine(machine))
-                save_records("equipment")
-                st.success("Readings updated and saved.")
-                st.rerun()
-        else:
-            st.info("Register equipment in Section D first.")
+        register, records, monitoring, charts = st.tabs(
+            ["D: Register", "D: Equipment Records", "E: Monitoring", "E: Charts"])
 
-        for machine in S["equipment"]:
-            temp_status, vib_status = check_machine(machine)
-            if temp_status == "Critical" or vib_status == "Critical":
-                st.error(f"{machine['Equipment ID']}: CRITICAL — inspect equipment immediately.")
-            elif temp_status == "Warning" or vib_status == "Warning":
-                st.warning(f"{machine['Equipment ID']}: WARNING — monitor equipment closely.")
+        # D: Register a machine and save its details.
+        with register:
+            with st.form("equipment_form", clear_on_submit=True):
+                left, right = st.columns(2)
+                eq_id = left.text_input("Equipment ID")
+                eq_type = left.selectbox("Equipment Type", equipment_types)
+                maker = left.text_input("Manufacturer")
+                hours = left.number_input("Operating Hours", min_value=0.0)
+                downtime = left.number_input("Downtime (hours)", min_value=0.0)
+                fuel = left.number_input("Fuel consumption (L/h)", min_value=0.0)
+                temp = left.number_input("Temperature (C)", value=60.0)
+                vibration = left.number_input("Vibration (mm/s)", min_value=0.0, value=2.0)
+                brakes = right.selectbox("Brake Status", part_statuses)
+                tyres = right.selectbox("Tyre Status", part_statuses)
+                engine = right.selectbox("Engine Status", part_statuses)
+                maintenance = right.selectbox("Maintenance Status", maintenance_statuses)
+                last = right.date_input("Last Maintenance", value=date.today())
+                due = right.date_input("Next Maintenance Due", value=date.today() + timedelta(days=90))
+                submitted = st.form_submit_button("Register Equipment")
 
-    with tabs[3]:
-        eq = equipment_table()
-        if not eq.empty:
-            st.subheader("Equipment Temperature (°C)")
-            st.bar_chart(eq.set_index("Equipment ID")["Temperature (C)"].apply(number))
-            st.subheader("Equipment Vibration (mm/s)")
-            st.bar_chart(eq.set_index("Equipment ID")["Vibration (mm/s)"].apply(number))
-            st.subheader("Equipment Condition")
-            st.bar_chart(eq["Condition"].value_counts())
-        else:
-            st.info("No equipment records for charts.")
+            if submitted:
+                existing_ids = [r["Equipment ID"] for r in st.session_state["equipment"]]
+                if not eq_id.strip() or not maker.strip():
+                    st.error("Equipment ID and manufacturer are required.")
+                elif eq_id.strip() in existing_ids:
+                    st.error("This equipment ID already exists.")
+                elif due < last:
+                    st.error("Next maintenance due cannot be before last maintenance.")
+                else:
+                    st.session_state["equipment"].append({
+                        "Equipment ID": eq_id.strip(), "Equipment Type": eq_type,
+                        "Manufacturer": maker.strip(), "Operating Hours": hours,
+                        "Temperature (C)": temp, "Vibration (mm/s)": vibration,
+                        "Fuel Consumption (L/h)": fuel, "Brake Status": brakes,
+                        "Tyre Status": tyres, "Engine Status": engine,
+                        "Maintenance Status": maintenance, "Downtime (hours)": downtime,
+                        "Last Maintenance": str(last), "Next Maintenance Due": str(due),
+                        "Alert Count": int(temp >= 80) + int(vibration >= 5)
+                    })
+                    save_equipment()
+                    st.session_state["equipment_message"] = "Equipment registered successfully."
+                    st.rerun()
+
+        data = pd.DataFrame(st.session_state["equipment"], columns=columns)
+        if not data.empty:
+            data["Condition"] = [machine_condition(t, v)
+                                 for t, v in zip(data["Temperature (C)"], data["Vibration (mm/s)"])]
+
+        # D: Search, filter and display saved equipment.
+        with records:
+            if data.empty:
+                st.info("No equipment recorded yet.")
+            else:
+                search = st.text_input("Search Equipment ID / Manufacturer")
+                kind = st.selectbox("Filter Equipment Type", ["All"] + equipment_types)
+                view = data.copy()
+                if kind != "All":
+                    view = view[view["Equipment Type"] == kind]
+                if search:
+                    mask = (view["Equipment ID"].astype(str).str.contains(search, case=False, regex=False)
+                            | view["Manufacturer"].astype(str).str.contains(search, case=False, regex=False))
+                    view = view[mask]
+                st.dataframe(view, use_container_width=True)
+
+        # E: Check and update the selected machine's readings.
+        with monitoring:
+            st.caption("These monitoring limits are educational example values.")
+            if data.empty:
+                st.info("Register equipment before checking readings.")
+            else:
+                st.table(pd.DataFrame({
+                    "Parameter": ["Temperature", "Vibration"],
+                    "Normal": ["Below 80 C", "Below 5 mm/s"],
+                    "Warning": ["80 to 100 C", "5 to 8 mm/s"],
+                    "Critical": ["Above 100 C", "Above 8 mm/s"]
+                }))
+                selected_id = st.selectbox("Select Equipment", data["Equipment ID"].tolist())
+                machine = next(r for r in st.session_state["equipment"] if r["Equipment ID"] == selected_id)
+
+                with st.form("reading_form_" + selected_id):
+                    new_temp = st.number_input("New Temperature (C)", value=float(machine["Temperature (C)"]))
+                    new_vibration = st.number_input("New Vibration (mm/s)", min_value=0.0,
+                                                    value=float(machine["Vibration (mm/s)"]))
+                    update = st.form_submit_button("Update Readings")
+
+                if update:
+                    machine["Temperature (C)"] = new_temp
+                    machine["Vibration (mm/s)"] = new_vibration
+                    machine["Alert Count"] += int(new_temp >= 80) + int(new_vibration >= 5)
+                    save_equipment()
+                    st.session_state["equipment_message"] = "Readings updated successfully."
+                    st.rerun()
+
+                for name, value, warning, critical, unit in [
+                    ("Temperature", machine["Temperature (C)"], 80, 100, "C"),
+                    ("Vibration", machine["Vibration (mm/s)"], 5, 8, "mm/s")
+                ]:
+                    status = reading_status(value, warning, critical)
+                    message = f"{selected_id}: {name} = {value:g} {unit} ({status})"
+                    if status == "Critical":
+                        st.error(message + ". Inspection required.")
+                    elif status == "Warning":
+                        st.warning(message + ". Monitor closely and arrange an inspection.")
+                    else:
+                        st.success(message)
+
+                st.dataframe(data[["Equipment ID", "Temperature (C)", "Vibration (mm/s)",
+                                   "Condition", "Alert Count"]], use_container_width=True)
+
+        # E: Compare readings with the warning and critical limits.
+        with charts:
+            if data.empty:
+                st.info("Register equipment to display charts.")
+            else:
+                for column, warning, critical in [("Temperature (C)", 80, 100),
+                                                   ("Vibration (mm/s)", 5, 8)]:
+                    figure = go.Figure(go.Bar(x=data["Equipment ID"], y=data[column]))
+                    figure.update_layout(title=column, xaxis_title="Equipment ID", yaxis_title=column)
+                    figure.add_hline(y=warning, line_dash="dash", line_color="orange", annotation_text="Warning")
+                    figure.add_hline(y=critical, line_dash="dash", line_color="red", annotation_text="Critical")
+                    st.plotly_chart(figure, use_container_width=True)
+                st.bar_chart(data["Condition"].value_counts())
 
     elif selected_page == "Maintenance Data":
         st.header("Maintenance Data")
