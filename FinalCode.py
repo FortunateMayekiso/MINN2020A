@@ -93,7 +93,7 @@ else:
 ## navigator for each role
 
     if role == "Administrator":
-        page = ["<CHOOSE>", "Dashboard", "Worker Safety Data", "Equipment Data", "Maintenance Data", "Manage Users", "Safety incidents", "Risk Assessment", "General Reports"]
+        page = ["<CHOOSE>", "Dashboard", "Worker Safety Data", "Equipment Data", "Maintenance Data", "Manage Users", "Safety Incidents", "Risk Assessment", "General Reports"]
 
     elif role == "Safety Officer":
         page = ["<CHOOSE>", "Dashboard", "Worker Safety Data", "Safety Incidents", "Risk Assessment", "General Reports"]
@@ -198,13 +198,13 @@ else:
             if incident_id.strip() == "":
                 st.error("Please enter incident ID.")
             
-            elif worker_id.strip()=="":
+            elif incident_worker_id.strip()=="":
                 st.error("Please input the Worker's ID.")
             
             else:
 
                 duplicate = False
-                for incident in st.session_state["indidents"]:
+                for incident in st.session_state["incidents"]:
                     if incident["Incident ID"] == incident_id.strip():
                         duplicate = True
                         break
