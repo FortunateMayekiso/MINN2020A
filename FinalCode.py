@@ -235,7 +235,6 @@ else:
 #####PLACEHOLDERS FOR OTHER SECTIONS
                         
     elif selected_page == "Equipment Data":
-        st.info("The equipment monitoring session still needs to be added")
         st.header("Equipment Database and Condition Monitoring")
         equipment_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "equipment.csv")
         equipment_types = ["Haul Truck", "Loader", "Excavator", "Drilling Machine",
