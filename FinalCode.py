@@ -12,6 +12,713 @@ from datetime import date, timedelta
 #Page settings
 st.set_page_config(page_title="KHWEZI MINING", page_icon=":pick:", layout="wide")
 
+BASE = os.path.dirname(os.path.abspath(__file__))   # data files live next to this program
+
+# SHARED HELPERS (written once, used by the dashboard, alerts logic and analysis)
+# =====================================================================
+# ------------------------------ CONSTANTS ------------------------------
+FILES = {k: os.path.join(BASE, v) for k, v in {
+    "workers": "workers.csv", "incidents": "incidents.csv", "equipment": "equipment.csv",
+    "maintenance_log": "maintenance_log.csv", "risks": "risks.csv"}.items()}
+USERS_FILE = os.path.join(BASE, "users.csv")
+DEMO_USERS = ("username,password,role\nLesiba,123,Administrator\nNatey,123,Mine Engineer\nSafetyUser,2468,Safety Officer\n"
+              "MaintenanceUser,123,Maintenance Engineer\nManagerUser,123,Manager\nInnocent,123,Administrator\n"
+              "Thato,123,Mine Engineer\nReesegofetse,123,Safety Officer\nTyler,123,Maintenance Engineer\n"
+              "Fortunate,123,Manager\n")
+
+DEPTS = ["Community Relations", "Electrical Engineering", "Emergency Response", "Environmental Management",
+         "Finance & Commercial", "Fixed Plant Maintenance", "Geology & Exploration", "Geotechnical Engineering",
+         "Grade Control", "Human Resources & Payroll", "Mine Engineering", "Mine Surveying",
+         "Mining Operations (Production)", "Mobile Equipment Maintenance", "Occupational Health & Safety",
+         "Processing / Metallurgy", "Security", "Supply Chain & Logistics"]
+INC_TYPES = ["Fall of ground", "Slip / trip / fall", "Vehicle / equipment collision", "Equipment failure",
+             "Fire / explosion", "Electrical", "Struck by object", "Hazardous substance exposure",
+             "Machinery entanglement", "Other"]
+EQ_TYPES = ["Haul Truck", "Loader", "Excavator", "Drilling Machine", "Bulldozer", "Scraper Winch", "Crusher", "Conveyor"]
+# Assumed owner of each equipment type; only used to link equipment downtime to departments in the analysis.
+EQ_DEPT = {"Haul Truck": "Mobile Equipment Maintenance", "Loader": "Mobile Equipment Maintenance",
+           "Excavator": "Mobile Equipment Maintenance", "Bulldozer": "Mobile Equipment Maintenance",
+           "Crusher": "Fixed Plant Maintenance", "Conveyor": "Fixed Plant Maintenance",
+           "Drilling Machine": "Mining Operations (Production)", "Scraper Winch": "Mining Operations (Production)"}
+MAINT_STATUS = ["Operational", "Due for Maintenance", "Overdue", "Under Maintenance"]
+PART = ["Good", "Worn", "Faulty"]
+EQ_COLS = ["Equipment ID", "Equipment Type", "Manufacturer", "Operating Hours", "Temperature (C)",
+           "Vibration (mm/s)", "Fuel Consumption (L/h)", "Brake Status", "Tyre Status", "Engine Status",
+           "Maintenance Status", "Downtime (hours)", "Last Maintenance", "Next Maintenance Due", "Alert Count"]
+NUM_COLS = ["Operating Hours", "Temperature (C)", "Vibration (mm/s)", "Fuel Consumption (L/h)",
+            "Downtime (hours)", "Alert Count"]
+# Educational prototype thresholds only - NOT manufacturer or mine safety limits
+LIMITS = {"Temperature": (80, 100, "°C"), "Vibration": (5, 8, "mm/s")}
+RISK_CLASSES = [(4, "Low"), (9, "Medium"), (16, "High"), (25, "Critical")]
+NORMAL_MSG = "NORMAL: Equipment operating within defined monitoring limits."
+
+# Colour palette (Palette 2: Sophisticated & Precision)
+BG, SURFACE, HEAD, GREEN, GREEN_HOVER = "#1A1D21", "#23272D", "#F0F3F7", "#1E5631", "#2E8B57"
+BORDER, FOCUS, TEXT, BAR = "#607D8B", "#3F51B5", "#9E9E9E", "#3F51B5"
+SEV_COLORS = {"Low": "#6cbf6c", "Medium": "#f2cf4a", "High": "#f09a3e", "Critical": "#d9534f"}
+COND_COLORS = {"Normal": "#6cbf6c", "Warning": "#f2cf4a", "Critical": "#d9534f"}
+TAG_COLORS = {"Critical": "#f8c9c9", "High": "#fcd9b6", "Warning": "#fde7b0", "Medium": "#fff4c2",
+              "Low": "#d9f2d9", "Normal": "#d9f2d9"}
+TAG_COLUMNS = ("Level", "Condition", "Classification", "Risk Level", "Severity")
+
+# ------------------------------ STYLE ------------------------------
+st.markdown("""
+<style>
+:root{--bg:#1A1D21;--surf:#23272D;--head:#F0F3F7;--green:#1E5631;--green-hv:#2E8B57;--border:#607D8B;--focus:#3F51B5;--text:#9E9E9E;color-scheme:dark;}
+.stApp,[data-testid="stHeader"]{background:var(--bg);}
+.stApp p,.stApp li,.stApp label,[data-testid="stCaptionContainer"]{color:var(--text);}
+h1,h2,h3,h4{color:var(--head)!important;}
+.block-container{padding-top:1.4rem;max-width:1400px;}
+.banner{background:var(--surf);padding:18px 26px;border-radius:8px;border-bottom:4px solid var(--green-hv);margin-bottom:14px;}
+.banner h1{margin:0;padding:0;font-size:1.9rem;letter-spacing:.05em;}
+.banner p{margin:2px 0 0;}
+[data-testid="stSidebar"]{background:var(--surf);}
+.stButton>button,.stFormSubmitButton>button,.stDownloadButton>button{background:var(--green);border:none;border-radius:6px;padding:.45rem 1.3rem;}
+.stButton>button p,.stFormSubmitButton>button p,.stDownloadButton>button p{color:var(--head)!important;font-weight:700;}
+.stButton>button:hover,.stFormSubmitButton>button:hover,.stDownloadButton>button:hover{background:var(--green-hv);}
+div[data-baseweb="input"],div[data-baseweb="textarea"],div[data-baseweb="select"]>div{border:1px solid var(--border)!important;border-radius:6px;}
+div[data-baseweb="input"]:focus-within,div[data-baseweb="textarea"]:focus-within,div[data-baseweb="select"]>div:focus-within{border-color:var(--focus)!important;box-shadow:0 0 0 2px rgba(63,81,181,.35);}
+button[data-baseweb="tab"][aria-selected="true"] p{color:var(--head)!important;font-weight:700;}
+div[data-baseweb="tab-highlight"]{background:var(--green-hv)!important;}
+[data-testid="stMetric"]{background:var(--surf);border:1px solid var(--border);border-left:5px solid var(--green-hv);border-radius:8px;padding:10px 14px;}
+[data-testid="stMetricValue"]{color:var(--head);}
+.risk-badge{color:var(--bg);font-weight:700;font-size:1.05rem;padding:12px 16px;border-radius:8px;margin:6px 0;}
+</style>
+""", unsafe_allow_html=True)
+
+S = st.session_state
+STRETCH = {"width": "stretch"} if tuple(int(x) for x in st.__version__.split(".")[:2]) >= (1, 50) \
+    else {"use_container_width": True}
+
+# ------------------------------ DATA ------------------------------
+for _key, _path in FILES.items():
+    if _key not in S:   # load saved data once per session
+        S[_key] = pd.read_csv(_path, keep_default_na=False).to_dict("records") if os.path.exists(_path) else []
+S.setdefault("logged_in", False)
+S.setdefault("role", "")
+
+def save(key):
+    pd.DataFrame(S[key]).to_csv(FILES[key], index=False)
+
+# ------------------------------ LOGIC HELPERS ------------------------------
+
+def level(v, warn, crit):
+    return "Critical" if v > crit else "Warning" if v >= warn else "Normal"
+
+def overall(temp, vib):
+    levels = [level(temp, *LIMITS["Temperature"][:2]), level(vib, *LIMITS["Vibration"][:2])]
+    return "Critical" if "Critical" in levels else "Warning" if "Warning" in levels else "Normal"
+
+def condition_alerts(eq_id, temp, vib):
+    out = []
+    for name, val in (("Temperature", temp), ("Vibration", vib)):
+        warn, crit, unit = LIMITS[name]
+        lvl = level(val, warn, crit)
+        if lvl == "Normal":
+            continue
+        is_crit = lvl == "Critical"
+        out.append({"Level": lvl, "ID Type": "Equipment ID", "ID": eq_id, "Parameter": name, "Value": f"{val} {unit}",
+                    "Status": "Above Critical Threshold" if is_crit else "Approaching Critical Threshold",
+                    "Message": (f"CRITICAL: Equipment {name.lower()} exceeds predefined threshold. Inspection required"
+                                if is_crit else f"WARNING: Equipment {name.lower()} approaching predefined threshold."),
+                    "Action": ("Inspect equipment and initiate appropriate maintenance/safety procedures."
+                               if is_crit else "Monitor closely and schedule an inspection.")})
+    return out
+
+def equipment_df():
+    """Equipment as a DataFrame with calculated Availability (%) and Condition."""
+    df = pd.DataFrame(S["equipment"], columns=EQ_COLS)
+    if df.empty:
+        return df
+    df[NUM_COLS] = df[NUM_COLS].apply(pd.to_numeric, errors="coerce").fillna(0)
+    total = (df["Operating Hours"] + df["Downtime (hours)"]).replace(0, float("nan"))
+    df["Availability (%)"] = (df["Operating Hours"] / total * 100).round(1).fillna(0)   # Op / (Op + Down) x 100
+    df["Condition"] = [overall(t, v) for t, v in zip(df["Temperature (C)"], df["Vibration (mm/s)"])]
+    return df
+
+FLAGS = ["Overdue", "Due", "Under Maintenance", "Excessive Downtime", "Repeated Alerts", "Low Availability"]
+
+def add_flags(df, window=14, min_avail=85, max_down=500, repeats=3):
+    today = pd.Timestamp(date.today())
+    nxt = pd.to_datetime(df["Next Maintenance Due"], errors="coerce")
+    ms = df["Maintenance Status"]
+    df["Under Maintenance"] = ms == "Under Maintenance"
+    df["Overdue"] = ((nxt < today) | (ms == "Overdue")) & ~df["Under Maintenance"]
+    df["Due"] = ((nxt <= today + pd.Timedelta(days=window)) | (ms == "Due for Maintenance")) \
+        & ~df["Under Maintenance"] & ~df["Overdue"]
+    df["Excessive Downtime"] = df["Downtime (hours)"] >= max_down
+    df["Repeated Alerts"] = df["Alert Count"] >= repeats
+    df["Low Availability"] = df["Availability (%)"] < min_avail
+    df["Flag Count"] = df[FLAGS].sum(axis=1)
+    df["Flags"] = df[FLAGS].apply(lambda r: ", ".join(c for c in FLAGS if r[c]), axis=1)
+    return df
+
+def generate_alerts(pages):
+    """Build every active alert the role is allowed to see; `pages` is the role's page list."""
+    out = []
+
+    def add(lvl, cat, id_type, id_, param, value, status, action):
+        out.append({"Level": lvl, "Category": cat, "ID Type": id_type, "ID": id_, "Parameter": param,
+                    "Value": value, "Status": status, "Action": action})
+
+    if "Equipment Data" in pages:
+        df = equipment_df()
+        if not df.empty:
+            for _, r in df.iterrows():
+                for a in condition_alerts(r["Equipment ID"], r["Temperature (C)"], r["Vibration (mm/s)"]):
+                    cat = "High equipment temperature" if a["Parameter"] == "Temperature" else "High equipment vibration"
+                    add(a["Level"], cat, "Equipment ID", a["ID"], a["Parameter"], a["Value"], a["Status"], a["Action"])
+            df = add_flags(df)
+            for _, r in df.iterrows():
+                if r["Overdue"]:
+                    add("Critical", "Overdue maintenance", "Equipment ID", r["Equipment ID"], "Maintenance",
+                        f"Due {r['Next Maintenance Due']}", "Overdue Maintenance", "Schedule maintenance immediately.")
+                if r["Excessive Downtime"]:
+                    add("Warning", "Excessive equipment downtime", "Equipment ID", r["Equipment ID"], "Downtime",
+                        f"{r['Downtime (hours)']:.0f} hours", "Above Downtime Limit (500 h)",
+                        "Investigate causes of downtime and review maintenance plan.")
+    if "Worker Safety Data" in pages:
+        for w in S["workers"]:
+            wid = w["Worker's ID"]
+            if w["PPE"] == "No":
+                add("Critical", "Low PPE compliance", "Worker ID", wid, "PPE", "Not wearing full PPE", "Non-compliant",
+                    "Stop work until full PPE is worn and record corrective action.")
+            if int(w["Fatigue Level"]) >= 8:
+                add("Warning", "High fatigue level", "Worker ID", wid, "Fatigue", f"{w['Fatigue Level']}/10",
+                    "Above Fatigue Limit (8)", "Rest the worker or reassign duties.")
+            if w["Risk Level"] == "High":
+                add("Warning", "High-risk safety observation", "Worker ID", wid, "Worker Risk Level", "High",
+                    "High-Risk Worker", "Investigate the safety observation and take action.")
+    if "Safety Incidents" in pages:
+        for i in S["incidents"]:
+            if i["Status"] != "Closed" and i["Severity"] in ("Critical", "High"):
+                crit = i["Severity"] == "Critical"
+                add("Critical" if crit else "Warning", "Critical safety incident" if crit else "High-severity safety incident",
+                    "Incident ID", i["Incident ID"], "Severity", i["Severity"], f"Status: {i['Status']}",
+                    "Attend immediately and complete the investigation.")
+    if "Risk Assessment" in pages:
+        for r in S["risks"]:
+            if r["Classification"] in ("High", "Critical"):
+                add("Critical" if r["Classification"] == "Critical" else "Warning", "High-risk assessment", "Risk ID",
+                    r["Risk ID"], "Risk Score", f"{r['Risk Score']} ({r['Classification']})",
+                    "Requires Management Attention", "Implement additional controls and review the risk.")
+    out.sort(key=lambda a: a["Level"] != "Critical")
+    return out
+
+
+# ------------------------------ DISPLAY HELPERS ------------------------------
+
+def show_table(df):
+    """Interactive table; Level / Condition / Severity style columns are colour coded."""
+    df = df.copy()
+    for c in df.columns:   # a column that mixes numbers and text is shown as text
+        if df[c].map(type).nunique() > 1:
+            df[c] = df[c].astype(str)
+    for c in df.select_dtypes("datetime").columns:
+        df[c] = df[c].dt.strftime("%Y-%m-%d")
+    cols = [c for c in TAG_COLUMNS if c in df.columns]
+    data = df.style.apply(lambda s: [f"background-color: {TAG_COLORS.get(str(v), '')}; color: {BG}" for v in s],
+                          subset=cols) if cols else df
+    st.dataframe(data, hide_index=True, **STRETCH)
+
+def filter_df(df, cols, key):
+    """Multiselect filters laid out in 3 columns; returns the filtered DataFrame."""
+    layout = st.columns(3)
+    for i, c in enumerate(cols):
+        sel = layout[i % 3].multiselect(c, sorted(df[c].astype(str).unique()), key=f"{key}_{c}")
+        if sel:
+            df = df[df[c].astype(str).isin(sel)]
+    return df
+
+def search_df(df, text):
+    if text.strip() and not df.empty:
+        df = df[df.astype(str).apply(lambda c: c.str.contains(text.strip(), case=False, regex=False)).any(axis=1)]
+    return df
+
+def style_fig(fig, title, height=320):
+    fig.update_layout(title=dict(text=title, font=dict(size=15, color=HEAD)), height=height,
+                      margin=dict(l=10, r=10, t=50, b=10), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor=SURFACE,
+                      font=dict(color=TEXT), showlegend=False)
+    fig.update_xaxes(gridcolor="#33383F")
+    fig.update_yaxes(gridcolor="#33383F")
+    st.plotly_chart(fig, **STRETCH)
+
+def bar_chart(data, title, colors=None, horizontal=False, lines=(), height=320):
+    """Bar chart from {label: value}; lines = [(value, colour, name)] draws threshold lines."""
+    data = dict(data)
+    if not data:
+        st.info("No data yet.")
+        return
+    labels, vals = [str(k) for k in data], [float(v) for v in data.values()]
+    marker = [(colors or {}).get(k, BAR) for k in data]
+    fig = go.Figure(go.Bar(x=vals if horizontal else labels, y=labels if horizontal else vals, marker_color=marker,
+                           orientation="h" if horizontal else "v", text=[f"{v:g}" for v in vals], textposition="outside",
+                           cliponaxis=False))
+    for v, colour, name in lines:
+        kw = dict(line_dash="dash", line_color=colour, annotation_text=name, annotation_font_color=colour)
+        fig.add_vline(x=v, **kw) if horizontal else fig.add_hline(y=v, **kw)
+    value_axis = fig.update_xaxes if horizontal else fig.update_yaxes
+    if all(v == int(v) for v in vals) and max(vals) <= 10:
+        value_axis(dtick=1)
+    if horizontal:
+        fig.update_yaxes(autorange="reversed")
+    elif len(labels) > 4:
+        fig.update_xaxes(tickangle=-30)
+    style_fig(fig, title, height)
+
+def line_chart(series, title, height=320):
+    fig = go.Figure(go.Scatter(x=[str(i) for i in series.index], y=series.values, mode="lines+markers",
+                               line=dict(color=BAR), marker=dict(color=GREEN_HOVER, size=8)))
+    fig.update_yaxes(rangemode="tozero", dtick=1 if series.max() <= 10 else None)
+    style_fig(fig, title, height)
+
+def stacked_chart(table, title, height=320):
+    """Stacked bars from a crosstab (rows = categories, columns = severity)."""
+    fig = go.Figure([go.Bar(name=c, x=[str(i) for i in table.index], y=table[c], marker_color=SEV_COLORS.get(c, BAR))
+                     for c in table.columns])
+    fig.update_layout(barmode="stack")
+    style_fig(fig, title, height)
+
+def by_id(eq, col):
+    return dict(zip(eq["Equipment ID"], eq[col])) if len(eq) else {}
+
+@st.cache_data
+def login_background():
+    """The login picture (logo + mine at sunrise) as base64; empty text if login_bg.jpeg is missing."""
+    path = os.path.join(BASE, "login_bg.jpeg")
+    if not os.path.exists(path):
+        return ""
+    with open(path, "rb") as f:
+        return base64.b64encode(f.read()).decode()
+
+# ------------------------------ PART (i) DASHBOARD ------------------------------
+def page_dashboard(pages):
+    st.header("Dashboard")
+    w, inc, eq, rk = pd.DataFrame(S["workers"]), pd.DataFrame(S["incidents"]), equipment_df(), pd.DataFrame(S["risks"])
+    alerts = generate_alerts(pages)
+    cond = eq["Condition"].value_counts() if len(eq) else pd.Series(dtype=int)
+    pct = lambda x: f"{x * 100:.0f}%"
+    kpis = {"Total workers": len(w), "Total safety incidents": len(inc),
+            "Near misses": int(pd.to_numeric(w["Near Misses"]).sum()) if len(w) else 0,
+            "High-risk observations": int((w["Risk Level"] == "High").sum()) if len(w) else 0,
+            "PPE compliance": pct((w["PPE"] == "Yes").mean()) if len(w) else "-",
+            "Total equipment": len(eq),
+            "Equipment available": int((eq["Maintenance Status"] == "Operational").sum()) if len(eq) else 0,
+            "Equipment under maintenance": int((eq["Maintenance Status"] == "Under Maintenance").sum()) if len(eq) else 0,
+            "Equipment alerts": int(len(eq) - cond.get("Normal", 0)),
+            "Avg equipment availability": f"{eq['Availability (%)'].mean():.1f}%" if len(eq) else "-",
+            "Critical equipment alerts": int(cond.get("Critical", 0)),
+            "High / Critical incidents": int(inc["Severity"].isin(["High", "Critical"]).sum()) if len(inc) else 0,
+            "Active critical alerts": sum(a["Level"] == "Critical" for a in alerts),
+            "High / Critical risks": int(rk["Classification"].isin(["High", "Critical"]).sum()) if len(rk) else 0,
+            "Equipment operating normally": pct(cond.get("Normal", 0) / len(eq)) if len(eq) else "-"}
+    items = list(kpis.items())
+    for i in range(0, len(items), 5):
+        for col, (name, val) in zip(st.columns(5), items[i:i + 5]):
+            col.metric(name, val)
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        sev = inc["Severity"].value_counts() if len(inc) else {}
+        bar_chart({k: int(sev.get(k, 0)) for k in SEV_COLORS}, "Incidents by severity", colors=SEV_COLORS)
+    with c2:
+        bar_chart({k: int(cond.get(k, 0)) for k in COND_COLORS}, "Equipment condition", colors=COND_COLORS)
+    with c3:
+        bar_chart(by_id(eq, "Availability (%)"), "Availability by equipment (%)", horizontal=True,
+                  lines=[(85, "#d9534f", "Min 85%")])
+
+    st.subheader("Top active alerts")
+    if alerts:
+        show_table(pd.DataFrame(alerts[:8], columns=["Level", "Category", "ID", "Parameter", "Value", "Status"]))
+        st.caption("Open the Alerts section for all alerts and recommended actions.")
+    else:
+        st.success("No active alerts.")
+
+# ------------------------------ (j) INTERACTIVE DATA ANALYSIS ------------------------------
+QUESTIONS = {}   # category -> {question text: function}
+SOURCE_NAMES = {"inc": "incident", "w": "worker", "eq": "equipment", "rk": "risk assessment"}
+
+def question(category, text, needs=()):
+    """Register an analysis question; `needs` lists the data sets that must contain records."""
+    def register(fn):
+        def run(d):
+            missing = [SOURCE_NAMES[n] for n in needs if d[n].empty]
+            if missing:
+                st.info(f"No {' or '.join(missing)} records are available for this question yet.")
+            else:
+                fn(d)
+        QUESTIONS.setdefault(category, {})[text] = run
+        return fn
+    return register
+
+def answer(msg):
+    st.info("**Answer:** " + msg)
+
+def leaders(counts):
+    top = counts[counts == counts.max()]
+    return ", ".join(map(str, top.index)), counts.max()
+
+
+def most_incidents(d, col, what, horizontal=True):
+    counts = d["inc"][col].astype(str).str.strip().value_counts()
+    names, n = leaders(counts)
+    answer(f"The {what} with the most incidents: **{names}** ({n} incident{'s' if n != 1 else ''}).")
+    bar_chart(counts.to_dict(), f"Incidents by {what}", horizontal=horizontal)
+
+def eq_extreme(d, col, what, unit="", highest=True, lines=()):
+    s = d["eq"].set_index("Equipment ID")[col]
+    val = s.max() if highest else s.min()
+    answer(f"{what}: **{', '.join(s[s == val].index)}** ({val:g}{unit}).")
+    bar_chart(s.sort_values(ascending=not highest).to_dict(), col, horizontal=True, lines=lines)
+
+def equipment_table(df, cols=("Equipment ID", "Equipment Type", "Availability (%)", "Downtime (hours)", "Alert Count",
+                              "Next Maintenance Due", "Maintenance Status", "Flags")):
+    show_table(df[[c for c in cols if c in df.columns]])
+
+def dept_risk(d):
+    """Safety risk index per department = high-risk workers + high/critical incidents + high/critical risks."""
+    parts = {}
+    if not d["w"].empty and "Department" in d["w"]:
+        parts["High-risk workers"] = d["w"][d["w"]["Risk Level"] == "High"].groupby("Department").size()
+    if not d["inc"].empty and "Department" in d["inc"]:
+        parts["High/Critical incidents"] = d["inc"][d["inc"]["Severity"].isin(["High", "Critical"])].groupby("Department").size()
+    if not d["rk"].empty and "Department" in d["rk"]:
+        parts["High/Critical risks"] = d["rk"][d["rk"]["Classification"].isin(["High", "Critical"])].groupby("Department").size()
+    if not parts:
+        return pd.DataFrame(columns=["Safety risk index"])
+    df = pd.DataFrame(parts).fillna(0).astype(int)
+    df["Safety risk index"] = df.sum(axis=1)
+    return df.sort_values("Safety risk index", ascending=False)
+
+def dept_table(d):
+    t = dept_risk(d)
+    if not d["eq"].empty:
+        down = d["eq"].assign(Department=d["eq"]["Equipment Type"].map(EQ_DEPT)).groupby("Department")["Downtime (hours)"].sum()
+        t = t.join(down.rename("Equipment downtime (h)"), how="outer").fillna(0)
+    return t
+
+# ---- Health and Safety ----
+HS = "Health and Safety"
+
+@question(HS, "How many safety incidents occurred during the selected period?")
+def q_incident_count(d):
+    answer(f"**{len(d['inc'])}** safety incident(s) between {d['start']} and {d['end']}.")
+    if len(d["inc"]):
+        line_chart(d["inc"]["Date"].dt.strftime("%Y-%m").value_counts().sort_index(), "Incidents per month")
+
+@question(HS, "Which department has the highest number of incidents?", ("inc",))
+def q_dept_incidents(d):
+    most_incidents(d, "Department", "department")
+
+@question(HS, "Which shift records the most incidents?", ("inc",))
+def q_shift_incidents(d):
+    most_incidents(d, "Shift", "shift", horizontal=False)
+
+@question(HS, "What percentage of workers comply with PPE requirements?", ("w",))
+def q_ppe(d):
+    w = d["w"]
+    pct = (w["PPE"] == "Yes").mean() * 100
+    answer(f"**{pct:.0f}%** of workers wear full PPE ({int((w['PPE'] == 'Yes').sum())} of {len(w)}).")
+    bar_chart(w["PPE"].value_counts().to_dict(), "Workers by PPE status", colors={"Yes": "#6cbf6c", "No": "#d9534f"})
+    if (w["PPE"] == "No").any():
+        st.markdown("**Non-compliant workers**")
+        show_table(w[w["PPE"] == "No"][["Worker's ID", "Department", "Job Role", "Shift", "Risk Level"]])
+
+@question(HS, "How many near misses have been recorded?", ("w",))
+def q_near_misses(d):
+    nm = pd.to_numeric(d["w"]["Near Misses"])
+    answer(f"**{int(nm.sum())}** near miss(es) recorded across {len(d['w'])} workers.")
+    by_dept = d["w"].assign(**{"Near Misses": nm}).groupby("Department")["Near Misses"].sum()
+    bar_chart(by_dept[by_dept > 0].sort_values(ascending=False).to_dict(), "Near misses by department", horizontal=True)
+
+@question(HS, "Which incident types occur most frequently?", ("inc",))
+def q_incident_types(d):
+    most_incidents(d, "Incident Type", "incident type")
+
+@question(HS, "How many incidents are classified as high or critical?", ("inc",))
+def q_high_critical(d):
+    hc = d["inc"][d["inc"]["Severity"].isin(["High", "Critical"])]
+    answer(f"**{len(hc)}** of {len(d['inc'])} incidents ({len(hc) / len(d['inc']) * 100:.0f}%) are High or Critical; "
+           f"**{int((hc['Status'] != 'Closed').sum())}** of them are still open.")
+    bar_chart(d["inc"]["Severity"].value_counts().reindex(list(SEV_COLORS)).fillna(0).to_dict(), "Incidents by severity",
+              colors=SEV_COLORS)
+    if len(hc):
+        show_table(hc[["Incident ID", "Date", "Department", "Incident Type", "Severity", "Status"]])
+
+@question(HS, "Which departments have the highest safety risk?")
+def q_dept_risk(d):
+    t = dept_risk(d)
+    if t.empty:
+        return st.info("No worker, incident or risk records are available for this question yet.")
+    names, n = leaders(t["Safety risk index"])
+    answer(f"Highest safety risk: **{names}** (index {n}).")
+    st.caption("Safety risk index = high-risk workers + high/critical incidents + high/critical risk assessments.")
+    bar_chart(t["Safety risk index"].head(10).to_dict(), "Safety risk index by department", horizontal=True)
+    show_table(t.reset_index(names="Department"))
+
+@question(HS, "Is there an observable difference in incidents between day and night shifts?", ("inc",))
+def q_day_night(d):
+    inc = d["inc"]
+    c = inc["Shift"].value_counts()
+    day, night = int(c.get("Day Shift", 0)), int(c.get("Night Shift", 0))
+    if day == night:
+        answer(f"No difference in the number of incidents: day shift and night shift both have **{day}**.")
+    else:
+        more, less = ("Night", "Day") if night > day else ("Day", "Night")
+        low = min(day, night)
+        extra = f" ({(abs(night - day) / low * 100):.0f}% more)" if low else ""
+        answer(f"**{more} shift** has more incidents: night = **{night}**, day = **{day}**{extra} than {less.lower()} shift.")
+    stacked_chart(pd.crosstab(inc["Shift"], inc["Severity"]).reindex(columns=list(SEV_COLORS)).dropna(axis=1, how="all"),
+                  "Incidents by shift and severity")
+
+@question(HS, "Which safety conditions require immediate attention?")
+def q_attention(d):
+    urgent = [a for a in d["alerts"] if a["ID Type"] != "Equipment ID" and a["Level"] == "Critical"]
+    if not urgent:
+        return st.success("No critical safety conditions are currently active.")
+    answer(f"**{len(urgent)}** critical safety condition(s) need immediate attention.")
+    show_table(pd.DataFrame(urgent)[["Level", "Category", "ID Type", "ID", "Value", "Action"]])
+
+# ---- Equipment ----
+EQ = "Equipment"
+
+@question(EQ, "Which equipment has the highest downtime?", ("eq",))
+def q_eq_downtime(d):
+    eq_extreme(d, "Downtime (hours)", "Highest downtime", " h", True, [(500, "#d9534f", "Limit 500 h")])
+
+@question(EQ, "Which equipment has the lowest availability?", ("eq",))
+def q_eq_availability(d):
+    eq_extreme(d, "Availability (%)", "Lowest availability", "%", False, [(85, "#d9534f", "Min 85%")])
+
+@question(EQ, "Which equipment has the highest vibration?", ("eq",))
+def q_eq_vibration(d):
+    eq_extreme(d, "Vibration (mm/s)", "Highest vibration", " mm/s", True,
+               [(5, "#e0a800", "Warning 5"), (8, "#d9534f", "Critical 8")])
+
+@question(EQ, "Which equipment has the highest operating temperature?", ("eq",))
+def q_eq_temperature(d):
+    eq_extreme(d, "Temperature (C)", "Highest temperature", " °C", True,
+               [(80, "#e0a800", "Warning 80"), (100, "#d9534f", "Critical 100")])
+
+@question(EQ, "Which equipment has generated the most alerts?", ("eq",))
+def q_eq_alerts(d):
+    eq_extreme(d, "Alert Count", "Most alerts recorded", " alert(s)", True)
+
+@question(EQ, "Which equipment requires maintenance?", ("eq",))
+def q_eq_maintenance(d):
+    df = d["eqf"][d["eqf"][["Overdue", "Due", "Under Maintenance"]].any(axis=1)]
+    answer(f"**{len(df)}** equipment item(s) are due, overdue or under maintenance: **{', '.join(df['Equipment ID']) or 'none'}**.")
+    equipment_table(df)
+
+@question(EQ, "Which equipment is overdue for maintenance?", ("eq",))
+def q_eq_overdue(d):
+    df = d["eqf"][d["eqf"]["Overdue"]]
+    answer(f"**{len(df)}** equipment item(s) overdue: **{', '.join(df['Equipment ID']) or 'none'}**.")
+    equipment_table(df)
+
+@question(EQ, "What is the average equipment availability?", ("eq",))
+def q_eq_avg_availability(d):
+    avg = d["eq"]["Availability (%)"].mean()
+    answer(f"Average equipment availability is **{avg:.1f}%** "
+           f"({'above' if avg >= 85 else 'below'} the 85% prototype minimum).")
+    bar_chart(by_id(d["eq"], "Availability (%)"), "Availability by equipment (%)", horizontal=True,
+              lines=[(85, "#d9534f", "Min 85%")])
+
+@question(EQ, "Which equipment type has the highest downtime?", ("eq",))
+def q_type_downtime(d):
+    t = d["eq"].groupby("Equipment Type")["Downtime (hours)"].sum().sort_values(ascending=False)
+    names, n = leaders(t)
+    answer(f"Highest total downtime: **{names}** ({n:g} h).")
+    bar_chart(t.to_dict(), "Total downtime by equipment type (h)", horizontal=True)
+
+@question(EQ, "Which equipment requires immediate inspection?", ("eq",))
+def q_eq_inspection(d):
+    df = d["eqf"]
+    df = df[(df["Condition"] == "Critical") | df["Overdue"]].assign(
+        Reason=lambda x: [", ".join(r for r, on in (("Critical condition", c == "Critical"), ("Overdue maintenance", o))
+                                    if on) for c, o in zip(x["Condition"], x["Overdue"])])
+    answer(f"**{len(df)}** equipment item(s) need immediate inspection: **{', '.join(df['Equipment ID']) or 'none'}**.")
+    show_table(df[["Equipment ID", "Equipment Type", "Temperature (C)", "Vibration (mm/s)", "Condition", "Reason"]])
+
+# ---- Integrated ----
+IN = "Integrated Safety and Equipment Analysis"
+
+@question(IN, "Are safety incidents associated with particular shifts?", ("inc",))
+def q_shift_association(d):
+    inc = d["inc"]
+    counts = inc["Shift"].value_counts()
+    share = (counts / counts.sum() * 100).round(0).astype(int)
+    answer("Share of incidents by shift: " + ", ".join(f"**{k}** {share[k]}% ({counts[k]})" for k in counts.index) + ".")
+    if not d["w"].empty:
+        workers = d["w"]["Shift"].value_counts()
+        rate = (counts / workers.reindex(counts.index)).dropna().round(2)
+        if len(rate):
+            st.write("Incidents per recorded worker on the shift: " + ", ".join(f"**{k}** {v}" for k, v in rate.items()))
+    stacked_chart(pd.crosstab(inc["Shift"], inc["Severity"]).reindex(columns=list(SEV_COLORS)).dropna(axis=1, how="all"),
+                  "Incidents by shift and severity")
+
+@question(IN, "Which departments have both high safety risk and high equipment downtime?", ("eq",))
+def q_dept_both(d):
+    t = dept_table(d)
+    if "Safety risk index" not in t or t["Safety risk index"].sum() == 0:
+        return st.info("No safety records with a department are available for this question yet.")
+    hi_s = (t["Safety risk index"] >= t["Safety risk index"].mean()) & (t["Safety risk index"] > 0)
+    hi_d = (t["Equipment downtime (h)"] >= t["Equipment downtime (h)"].mean()) & (t["Equipment downtime (h)"] > 0)
+    both = t[hi_s & hi_d]
+    answer(f"Departments high on both: **{', '.join(both.index) or 'none'}**.")
+    st.caption("High = at or above the average of all departments listed. Equipment downtime is linked to departments "
+               "by equipment type (e.g. haul trucks and loaders: Mobile Equipment Maintenance; crushers and conveyors: "
+               "Fixed Plant Maintenance; drills and winches: Mining Operations).")
+    show_table(t.assign(**{"High on both": (hi_s & hi_d).map({True: "Yes", False: "No"})}).reset_index(names="Department"))
+
+@question(IN, "Which equipment contributes to the greatest number of alerts?", ("eq",))
+def q_eq_alert_sources(d):
+    ids = pd.Series([a["ID"] for a in d["alerts"] if a["ID Type"] == "Equipment ID"], dtype=str).value_counts()
+    if ids.empty:
+        return st.success("There are no active equipment alerts.")
+    names, n = leaders(ids)
+    answer(f"Most active alerts: **{names}** ({n} alert{'s' if n != 1 else ''}: temperature, vibration, overdue maintenance, downtime).")
+    bar_chart(ids.to_dict(), "Active alerts per equipment", horizontal=True)
+
+@question(IN, "Which equipment should receive maintenance priority?", ("eq",))
+def q_priority(d):
+    pri = d["eqf"][d["eqf"]["Flag Count"] > 0].sort_values(["Overdue", "Flag Count", "Availability (%)"],
+                                                           ascending=[False, False, True])
+    if pri.empty:
+        return st.success("No equipment currently requires maintenance attention.")
+    answer(f"Maintenance priority order: **{', '.join(pri['Equipment ID'])}** (overdue first, then most flags, then lowest availability).")
+    equipment_table(pri)
+
+@question(IN, "What are the most common causes of safety incidents?", ("inc",))
+def q_causes(d):
+    counts = d["inc"]["Cause"].str.strip().str.capitalize().value_counts()
+    names, n = leaders(counts)
+    answer(f"Most common cause: **{names}** ({n} incident{'s' if n != 1 else ''}).")
+    bar_chart(counts.head(10).to_dict(), "Most common causes", horizontal=True)
+
+@question(IN, "Which safety indicators require management intervention?")
+def q_indicators(d):
+    w, inc, rk, rows = d["w"], d["inc"], d["rk"], []
+
+    def row(name, value, target, bad):
+        rows.append({"Indicator": name, "Value": value, "Target": target, "Level": "Warning" if bad else "Normal",
+                     "Management action": "Intervene" if bad else "None"})
+
+    if not w.empty:
+        ppe = (w["PPE"] == "Yes").mean() * 100
+        row("PPE compliance", f"{ppe:.0f}%", "100%", ppe < 100)
+        row("Workers with fatigue 8 or more", int((w["Fatigue Level"].astype(int) >= 8).sum()), "0",
+            (w["Fatigue Level"].astype(int) >= 8).any())
+        row("Workers without safety training", int((w["Training"] == "No").sum()), "0", (w["Training"] == "No").any())
+        row("High-risk workers", int((w["Risk Level"] == "High").sum()), "0", (w["Risk Level"] == "High").any())
+    if not inc.empty:
+        open_hc = int(((inc["Status"] != "Closed") & inc["Severity"].isin(["High", "Critical"])).sum())
+        lti = int((inc["Lost-Time Injury"] == "Yes").sum())
+        row("Open High/Critical incidents", open_hc, "0", open_hc > 0)
+        row("Lost-time injuries", lti, "0", lti > 0)
+    if not rk.empty:
+        hc = int(rk["Classification"].isin(["High", "Critical"]).sum())
+        row("High/Critical risk assessments", hc, "0", hc > 0)
+    if not rows:
+        return st.info("No worker, incident or risk records are available for this question yet.")
+    df = pd.DataFrame(rows)
+    answer(f"**{int((df['Level'] == 'Warning').sum())}** of {len(df)} safety indicators need management intervention.")
+    show_table(df)
+
+@question(IN, "What percentage of monitored equipment is operating normally?", ("eq",))
+def q_normal(d):
+    n = d["eq"]["Condition"].value_counts()
+    answer(f"**{n.get('Normal', 0) / len(d['eq']) * 100:.0f}%** of monitored equipment is operating normally "
+           f"({int(n.get('Normal', 0))} of {len(d['eq'])}).")
+    bar_chart({k: int(n.get(k, 0)) for k in COND_COLORS}, "Equipment condition", colors=COND_COLORS)
+
+@question(IN, "How many critical alerts are currently active?")
+def q_critical_alerts(d):
+    crit = [a for a in d["alerts"] if a["Level"] == "Critical"]
+    answer(f"**{len(crit)}** critical alert(s) are active out of {len(d['alerts'])} active alerts.")
+    if crit:
+        show_table(pd.DataFrame(crit)[["Level", "Category", "ID Type", "ID", "Value", "Status"]])
+
+@question(IN, "Which areas of the operation require the greatest attention?")
+def q_areas(d):
+    t = dept_table(d)
+    if t.empty:
+        return st.info("No safety or equipment records are available for this question yet.")
+    if not d["inc"].empty:
+        loc = d["inc"]["Location"].astype(str).str.strip().value_counts()
+        names, n = leaders(loc)
+        answer(f"Location with the most incidents: **{names}** ({n}).")
+        bar_chart(loc.head(8).to_dict(), "Incidents by location", horizontal=True)
+    if "Safety risk index" in t and t["Safety risk index"].sum() > 0:
+        names, n = leaders(t["Safety risk index"])
+        st.write(f"Department with the highest safety risk: **{names}** (index {n}).")
+    st.markdown("**Departments**")
+    show_table(t.reset_index(names="Department"))
+
+@question(IN, "What recommendations can be generated from the monitoring results?")
+def q_recommendations(d):
+    w, inc, rk, eqf, rec = d["w"], d["inc"], d["rk"], d["eqf"], []
+    crit = sum(a["Level"] == "Critical" for a in d["alerts"])
+    if crit:
+        rec.append(f"Resolve the **{crit}** active critical alert(s) first (see the Alerts section).")
+    if not w.empty:
+        if (w["PPE"] == "No").any():
+            rec.append(f"Enforce PPE: **{int((w['PPE'] == 'No').sum())}** worker(s) are not wearing full PPE.")
+        if (w["Training"] == "No").any():
+            rec.append(f"Complete safety training for **{int((w['Training'] == 'No').sum())}** worker(s).")
+        if (w["Fatigue Level"].astype(int) >= 8).any():
+            rec.append("Rest or reassign workers reporting fatigue of 8 or more.")
+    if not inc.empty:
+        open_hc = inc[(inc["Status"] != "Closed") & inc["Severity"].isin(["High", "Critical"])]
+        if len(open_hc):
+            rec.append(f"Close out the **{len(open_hc)}** open High/Critical incident(s): {', '.join(open_hc['Incident ID'])}.")
+        shifts = inc["Shift"].value_counts()
+        if len(shifts) > 1 and shifts.iloc[0] > shifts.iloc[1]:
+            rec.append(f"Review supervision and controls on **{shifts.index[0]}**, which has the most incidents.")
+    if not rk.empty and rk["Classification"].isin(["High", "Critical"]).any():
+        rec.append("Implement additional controls for the High/Critical risk assessments.")
+    if not eqf.empty:
+        for flag, text in (("Overdue", "Schedule overdue maintenance immediately for"),
+                           ("Excessive Downtime", "Investigate excessive downtime of"),
+                           ("Low Availability", "Improve availability of")):
+            ids = eqf.loc[eqf[flag], "Equipment ID"].tolist()
+            if ids:
+                rec.append(f"{text}: **{', '.join(ids)}**.")
+        crit_eq = eqf.loc[eqf["Condition"] == "Critical", "Equipment ID"].tolist()
+        if crit_eq:
+            rec.append(f"Inspect equipment in critical condition: **{', '.join(crit_eq)}**.")
+    if not rec:
+        return st.success("No intervention is required based on the current records.")
+    st.markdown("\n".join(f"- {r}" for r in rec))
+
+def analysis_categories(pages):
+    safety = "Safety Incidents" in pages or "Worker Safety Data" in pages
+    equip = "Equipment Data" in pages
+    return [c for c, ok in ((HS, safety), (EQ, equip), (IN, safety and equip)) if ok]
+
+def page_analysis(pages):
+    st.header("Interactive Data Analysis")
+    cats = analysis_categories(pages)
+    c1, c2 = st.columns([1, 2])
+    cat = c1.selectbox("Question category", cats)
+    q = c2.selectbox("Question", list(QUESTIONS[cat]))
+
+    inc = pd.DataFrame(S["incidents"])
+    dates = pd.to_datetime(inc["Date"], errors="coerce").dropna() if not inc.empty else pd.Series(dtype="datetime64[ns]")
+    d1, d2 = st.columns(2)
+    start = d1.date_input("Period from (incidents)", value=dates.min().date() if len(dates) else date.today() - timedelta(days=30))
+    end = d2.date_input("Period to (incidents)", value=max(dates.max().date(), date.today()) if len(dates) else date.today())
+
+    if not inc.empty:
+        inc["Date"] = pd.to_datetime(inc["Date"], errors="coerce")
+        inc = inc[(inc["Date"] >= pd.Timestamp(start)) & (inc["Date"] <= pd.Timestamp(end))]
+    eq = equipment_df()
+    data = {"w": pd.DataFrame(S["workers"]), "inc": inc, "eq": eq, "rk": pd.DataFrame(S["risks"]),
+            "eqf": add_flags(eq.copy()) if not eq.empty else eq, "alerts": generate_alerts(pages),
+            "start": start, "end": end}
+    st.subheader(q)
+    QUESTIONS[cat][q](data)
+
 st.title("KHWEZI MINING")
 st.subheader("Health, Safety and Equipment Monitoring")
 
@@ -46,6 +753,10 @@ if "equipment" not in st.session_state:
 # Read users from the CSV file
 users = {} #{"Lesiba": ["123","admin"]}
 
+if not os.path.exists(USERS_FILE):   # FIX: create a users.csv instead of crashing when the file is missing
+    with open(USERS_FILE, "w", newline="") as f:
+        f.write(DEMO_USERS)
+        
 with open("users.csv", mode="r", newline="") as file:   # open the users.csv file in read mode, with newline="" to handle line endings correctly across different operating systems.
     reader = csv.DictReader(file)      #values of the csv must be read as a dictinary {username: Lesiba , password: 123, role: admin}]}
 
@@ -54,13 +765,8 @@ with open("users.csv", mode="r", newline="") as file:   # open the users.csv fil
         file_password = row["password"].strip()
         file_role = row["role"].strip()
 
-
         if file_username != "":
             users[file_username] = {"password":file_password, "role":file_role}  #converts the csv into a dictionary
-
-
-
-
 
 #Login page
 
@@ -101,27 +807,34 @@ else:
     role= st.session_state["role"]
     st.sidebar.title("Khwezi Mining")
     st.sidebar.write("Logged in as:", role)
+    
+    ####Logout
 
+    if st.sidebar.button("Logout"):
+        st.session_state["logged_in"] = False
+        st.session_state["role"] = ""
+
+        st.rerun()
 
 
 ## navigator for each role
 
     if role == "Administrator":
-        page = ["<CHOOSE>", "Dashboard", "Worker Safety Data", "Equipment Data", "Maintenance Data", "Manage Users", "Safety Incidents", "Risk Assessment", "Alerts", "General Reports"]
+        page = ["Dashboard", "Worker Safety Data", "Equipment Data", "Maintenance Data", "Manage Users", "Safety Incidents", "Risk Assessment", "Alerts", "General Reports"]
 
     elif role == "Safety Officer":
-        page = ["<CHOOSE>", "Dashboard", "Worker Safety Data", "Safety Incidents", "Risk Assessment", "Alerts", "General Reports"]
+        page = ["Dashboard", "Worker Safety Data", "Safety Incidents", "Risk Assessment", "Alerts", "General Reports"]
 
     elif role == "Mine Engineer":
-        page = ["<CHOOSE>", "Dashboard", "Worker Safety Data", "Equipment Data", "Maintenance Data", "Safety Incidents", "Risk Assessment", "Alerts", "General Reports"]
+        page = ["Dashboard", "Worker Safety Data", "Equipment Data", "Maintenance Data", "Safety Incidents", "Risk Assessment", "Alerts", "General Reports"]
 
     elif role == "Maintenance Manager": ##########Rename this role to Maintenance Engineer
-        page = ["<CHOOSE>", "Dashboard", "Equipment Data", "Maintenance Data", "Alerts", "General Reports"] 
+        page = ["Dashboard", "Equipment Data", "Maintenance Data", "Alerts", "General Reports"] 
 
     else:
-        page = ["<CHOOSE>", "Dashboard", "Worker Safety Data", "Equipment Data", "Maintenance Data", "Safety Incidents", "Risk Assessment", "Alerts", "General Reports"]
+        page = ["Dashboard", "Worker Safety Data", "Equipment Data", "Maintenance Data", "Safety Incidents", "Risk Assessment", "Alerts", "General Reports"]
 
-    selected_page = st.sidebar.selectbox("Select a section", page)  #might be bad!!!!!!!!!!!
+    selected_page = st.sidebar.selectbox("Select a section", page, index = 0)  #might be bad!!!!!!!!!!!
 
     st.write(" Hello!, ", role, "! Welcome to the Khwezi Mining Health, Safety and Equipment Monitoring System.")
 
@@ -137,6 +850,8 @@ else:
             if incident["Severity"] == "High": ####CHECK THIS LINE AGAIN!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
                 high_incidents += 1
         st.metric("High Severity Incidents", high_incidents) ########CHECK THIS LINE AGAIN!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        page_dashboard(page)
+
 
     ###Worker Safety Data
 
@@ -200,12 +915,17 @@ else:
         st.subheader("Record a New Safety Incident")
         incident_id = st.text_input("Incident ID")
         incident_worker_id = st.text_input("Worker ID")
+        incident_department = st.selectbox("Department", ["<CHOOSE>"] + DEPTS)
+         incident_shift = st.selectbox("Shift", ["<CHOOSE>", "Day Shift", "Night Shift"])
         incident_date = st.date_input("Date of incident", value=date.today())
         location = st.text_area("Location of the incident", placeholder= "Where did the incident happen...")
         incident_type = st.text_area("Type of incident", placeholder = "What type...")
         severity = st.selectbox("Incident Severity", ["<CHOOSE>", "Low", "Medium", "High", "Critical"])
         injury = st.selectbox(" Did the incident cause injury?", ["<CHOOSE>", "No", "Yes"])
         description = st.text_area("Description of Incident", placeholder= "Describe what happened...")
+        cause = st.text_input("Cause of incident")
+        lost_time = st.selectbox("Lost-time injury?", ["<CHOOSE>", "No", "Yes"])
+        incident_status = st.selectbox("Incident Status", ["Open", "Under Investigation", "Closed"])
         corrective_action = st.text_area("Corrective Measures Taken", placeholder = "Describe actions taken...")
 
         if st.button("Record Incident"):
@@ -242,6 +962,25 @@ else:
         if len(st.session_state["incidents"]) > 0:
             st.dataframe(st.session_state["incidents"], use_container_width = True)
             st.write("Total incidents recorded:", len(st.session_state["incidents"]))
+            
+            # FIX: search, filter, count and trends (brief part c) were missing. 
+            inc_df = pd.DataFrame(st.session_state["incidents"])
+            st.subheader("Search, filter and count incidents")
+            search_text = st.text_input("Search incidents", placeholder="ID, worker, location, cause, description...")
+            inc_view = search_df(filter_df(inc_df, ["Severity", "Shift", "Incident Type", "Status", "Department", "Injury"], "inc"), search_text)
+            show_table(inc_view)
+            st.write("Incidents shown:", len(inc_view), "of", len(inc_df))
+
+            group = st.selectbox("Categorise and count incidents by", ["Incident Type", "Severity", "Department", "Shift", "Cause", "Status", "Location"])
+            counts = inc_df[group].value_counts()
+            bar_chart(counts.to_dict(), "Incidents by " + group, colors=SEV_COLORS, horizontal=True)
+            st.write("Most frequent " + group.lower() + ":", counts.index[0], "(" + str(counts.iloc[0]) + " incidents)")
+
+            monthly = st.radio("Trend interval", ["Daily", "Monthly"], horizontal=True) == "Monthly"
+            dates = pd.to_datetime(inc_df["Date"], errors="coerce").dropna()
+            if len(dates) > 0:
+                line_chart(dates.dt.strftime("%Y-%m" if monthly else "%Y-%m-%d").value_counts().sort_index(),
+                           "Incidents per " + ("month" if monthly else "day"))
         else:
             st.info("No safety incidents have been recorded yet.")
 
@@ -707,484 +1446,9 @@ else:
             user_list.append({"Username": username_from_file, "Role": users[username_from_file]["role"]})
         
         st.dataframe(user_list, use_container_width=True)
-        
-# i) Mining Monitoring Dashboard 
-def page_dashboard():
-    st.header("Dashboard")
-    w, inc, eq, rk = pd.DataFrame(S["workers"]), pd.DataFrame(S["incidents"]), equipment_df(), pd.DataFrame(S["risks"])
-    alerts = generate_alerts(S["role"])
-    cond = eq["Condition"].value_counts() if len(eq) else pd.Series(dtype=int)
-    pct = lambda x: f"{x * 100:.0f}%"
-    kpis = {"Total workers": len(w), "Total safety incidents": len(inc),
-            "Near misses": int(pd.to_numeric(w["Near Misses"]).sum()) if len(w) else 0,
-            "High-risk observations": int((w["Risk Level"] == "High").sum()) if len(w) else 0,
-            "PPE compliance": pct((w["PPE"] == "Yes").mean()) if len(w) else "-",
-            "Total equipment": len(eq),
-            "Equipment available": int((eq["Maintenance Status"] == "Operational").sum()) if len(eq) else 0,
-            "Equipment under maintenance": int((eq["Maintenance Status"] == "Under Maintenance").sum()) if len(eq) else 0,
-            "Equipment alerts": int(len(eq) - cond.get("Normal", 0)),
-            "Avg equipment availability": f"{eq['Availability (%)'].mean():.1f}%" if len(eq) else "-",
-            "Critical equipment alerts": int(cond.get("Critical", 0)),
-            "High / Critical incidents": int(inc["Severity"].isin(["High", "Critical"]).sum()) if len(inc) else 0,
-            "Active critical alerts": sum(a["Level"] == "Critical" for a in alerts),
-            "High / Critical risks": int(rk["Classification"].isin(["High", "Critical"]).sum()) if len(rk) else 0,
-            "Equipment operating normally": pct(cond.get("Normal", 0) / len(eq)) if len(eq) else "-"}
-    items = list(kpis.items())
-    for i in range(0, len(items), 5):
-        for col, (name, val) in zip(st.columns(5), items[i:i + 5]):
-            col.metric(name, val)
 
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        sev = inc["Severity"].value_counts() if len(inc) else {}
-        bar_chart({k: int(sev.get(k, 0)) for k in SEV_COLORS}, "Incidents by severity", colors=SEV_COLORS)
-    with c2:
-        bar_chart({k: int(cond.get(k, 0)) for k in COND_COLORS}, "Equipment condition", colors=COND_COLORS)
-    with c3:
-        bar_chart(by_id(eq, "Availability (%)"), "Availability by equipment (%)", horizontal=True,
-                  lines=[(85, "#d9534f", "Min 85%")])
 
-    st.subheader("Top active alerts")
-    if alerts:
-        show_table(pd.DataFrame(alerts[:8], columns=["Level", "Category", "ID", "Parameter", "Value", "Status"]))
-        st.caption("Open the Alerts section for all alerts and recommended actions.")
-    else:
-        st.success("No active alerts.")
-
-# j) Interactive Data Analysis 
-QUESTIONS = {}   # category -> {question text: function}
-SOURCE_NAMES = {"inc": "incident", "w": "worker", "eq": "equipment", "rk": "risk assessment"}
-
-
-def question(category, text, needs=()):
-    """Register an analysis question; `needs` lists the data sets that must contain records."""
-    def register(fn):
-        def run(d):
-            missing = [SOURCE_NAMES[n] for n in needs if d[n].empty]
-            if missing:
-                st.info(f"No {' or '.join(missing)} records are available for this question yet.")
-            else:
-                fn(d)
-        QUESTIONS.setdefault(category, {})[text] = run
-        return fn
-    return register
-
-
-def answer(msg):
-    st.info("**Answer:** " + msg)
-
-
-def leaders(counts):
-    top = counts[counts == counts.max()]
-    return ", ".join(map(str, top.index)), counts.max()
-
-
-def most_incidents(d, col, what, horizontal=True):
-    counts = d["inc"][col].astype(str).str.strip().value_counts()
-    names, n = leaders(counts)
-    answer(f"The {what} with the most incidents: **{names}** ({n} incident{'s' if n != 1 else ''}).")
-    bar_chart(counts.to_dict(), f"Incidents by {what}", horizontal=horizontal)
-
-
-def eq_extreme(d, col, what, unit="", highest=True, lines=()):
-    s = d["eq"].set_index("Equipment ID")[col]
-    val = s.max() if highest else s.min()
-    answer(f"{what}: **{', '.join(s[s == val].index)}** ({val:g}{unit}).")
-    bar_chart(s.sort_values(ascending=not highest).to_dict(), col, horizontal=True, lines=lines)
-
-
-def equipment_table(df, cols=("Equipment ID", "Equipment Type", "Availability (%)", "Downtime (hours)", "Alert Count",
-                              "Next Maintenance Due", "Maintenance Status", "Flags")):
-    show_table(df[[c for c in cols if c in df.columns]])
-
-
-def dept_risk(d):
-    """Safety risk index per department = high-risk workers + high/critical incidents + high/critical risks."""
-    parts = {}
-    if not d["w"].empty:
-        parts["High-risk workers"] = d["w"][d["w"]["Risk Level"] == "High"].groupby("Department").size()
-    if not d["inc"].empty:
-        parts["High/Critical incidents"] = d["inc"][d["inc"]["Severity"].isin(["High", "Critical"])].groupby("Department").size()
-    if not d["rk"].empty:
-        parts["High/Critical risks"] = d["rk"][d["rk"]["Classification"].isin(["High", "Critical"])].groupby("Department").size()
-    if not parts:
-        return pd.DataFrame(columns=["Safety risk index"])
-    df = pd.DataFrame(parts).fillna(0).astype(int)
-    df["Safety risk index"] = df.sum(axis=1)
-    return df.sort_values("Safety risk index", ascending=False)
-
-
-def dept_table(d):
-    t = dept_risk(d)
-    if not d["eq"].empty:
-        down = d["eq"].assign(Department=d["eq"]["Equipment Type"].map(EQ_DEPT)).groupby("Department")["Downtime (hours)"].sum()
-        t = t.join(down.rename("Equipment downtime (h)"), how="outer").fillna(0)
-    return t
-
-
-# ---- Health and Safety ----
-HS = "Health and Safety"
-
-
-@question(HS, "How many safety incidents occurred during the selected period?")
-def q_incident_count(d):
-    answer(f"**{len(d['inc'])}** safety incident(s) between {d['start']} and {d['end']}.")
-    if len(d["inc"]):
-        line_chart(d["inc"]["Date"].dt.strftime("%Y-%m").value_counts().sort_index(), "Incidents per month")
-
-
-@question(HS, "Which department has the highest number of incidents?", ("inc",))
-def q_dept_incidents(d):
-    most_incidents(d, "Department", "department")
-
-
-@question(HS, "Which shift records the most incidents?", ("inc",))
-def q_shift_incidents(d):
-    most_incidents(d, "Shift", "shift", horizontal=False)
-
-
-@question(HS, "What percentage of workers comply with PPE requirements?", ("w",))
-def q_ppe(d):
-    w = d["w"]
-    pct = (w["PPE"] == "Yes").mean() * 100
-    answer(f"**{pct:.0f}%** of workers wear full PPE ({int((w['PPE'] == 'Yes').sum())} of {len(w)}).")
-    bar_chart(w["PPE"].value_counts().to_dict(), "Workers by PPE status", colors={"Yes": "#6cbf6c", "No": "#d9534f"})
-    if (w["PPE"] == "No").any():
-        st.markdown("**Non-compliant workers**")
-        show_table(w[w["PPE"] == "No"][["Worker's ID", "Department", "Job Role", "Shift", "Risk Level"]])
-
-
-@question(HS, "How many near misses have been recorded?", ("w",))
-def q_near_misses(d):
-    nm = pd.to_numeric(d["w"]["Near Misses"])
-    answer(f"**{int(nm.sum())}** near miss(es) recorded across {len(d['w'])} workers.")
-    by_dept = d["w"].assign(**{"Near Misses": nm}).groupby("Department")["Near Misses"].sum()
-    bar_chart(by_dept[by_dept > 0].sort_values(ascending=False).to_dict(), "Near misses by department", horizontal=True)
-
-
-@question(HS, "Which incident types occur most frequently?", ("inc",))
-def q_incident_types(d):
-    most_incidents(d, "Incident Type", "incident type")
-
-
-@question(HS, "How many incidents are classified as high or critical?", ("inc",))
-def q_high_critical(d):
-    hc = d["inc"][d["inc"]["Severity"].isin(["High", "Critical"])]
-    answer(f"**{len(hc)}** of {len(d['inc'])} incidents ({len(hc) / len(d['inc']) * 100:.0f}%) are High or Critical; "
-           f"**{int((hc['Status'] != 'Closed').sum())}** of them are still open.")
-    bar_chart(d["inc"]["Severity"].value_counts().reindex(list(SEV_COLORS)).fillna(0).to_dict(), "Incidents by severity",
-              colors=SEV_COLORS)
-    if len(hc):
-        show_table(hc[["Incident ID", "Date", "Department", "Incident Type", "Severity", "Status"]])
-
-
-@question(HS, "Which departments have the highest safety risk?")
-def q_dept_risk(d):
-    t = dept_risk(d)
-    if t.empty:
-        return st.info("No worker, incident or risk records are available for this question yet.")
-    names, n = leaders(t["Safety risk index"])
-    answer(f"Highest safety risk: **{names}** (index {n}).")
-    st.caption("Safety risk index = high-risk workers + high/critical incidents + high/critical risk assessments.")
-    bar_chart(t["Safety risk index"].head(10).to_dict(), "Safety risk index by department", horizontal=True)
-    show_table(t.reset_index(names="Department"))
-
-
-@question(HS, "Is there an observable difference in incidents between day and night shifts?", ("inc",))
-def q_day_night(d):
-    inc = d["inc"]
-    c = inc["Shift"].value_counts()
-    day, night = int(c.get("Day Shift", 0)), int(c.get("Night Shift", 0))
-    if day == night:
-        answer(f"No difference in the number of incidents: day shift and night shift both have **{day}**.")
-    else:
-        more, less = ("Night", "Day") if night > day else ("Day", "Night")
-        low = min(day, night)
-        extra = f" ({(abs(night - day) / low * 100):.0f}% more)" if low else ""
-        answer(f"**{more} shift** has more incidents: night = **{night}**, day = **{day}**{extra} than {less.lower()} shift.")
-    stacked_chart(pd.crosstab(inc["Shift"], inc["Severity"]).reindex(columns=list(SEV_COLORS)).dropna(axis=1, how="all"),
-                  "Incidents by shift and severity")
-
-
-@question(HS, "Which safety conditions require immediate attention?")
-def q_attention(d):
-    urgent = [a for a in d["alerts"] if a["ID Type"] != "Equipment ID" and a["Level"] == "Critical"]
-    if not urgent:
-        return st.success("No critical safety conditions are currently active.")
-    answer(f"**{len(urgent)}** critical safety condition(s) need immediate attention.")
-    show_table(pd.DataFrame(urgent)[["Level", "Category", "ID Type", "ID", "Value", "Action"]])
-
-
-# ---- Equipment ----
-EQ = "Equipment"
-
-
-@question(EQ, "Which equipment has the highest downtime?", ("eq",))
-def q_eq_downtime(d):
-    eq_extreme(d, "Downtime (hours)", "Highest downtime", " h", True, [(500, "#d9534f", "Limit 500 h")])
-
-
-@question(EQ, "Which equipment has the lowest availability?", ("eq",))
-def q_eq_availability(d):
-    eq_extreme(d, "Availability (%)", "Lowest availability", "%", False, [(85, "#d9534f", "Min 85%")])
-
-
-@question(EQ, "Which equipment has the highest vibration?", ("eq",))
-def q_eq_vibration(d):
-    eq_extreme(d, "Vibration (mm/s)", "Highest vibration", " mm/s", True,
-               [(5, "#e0a800", "Warning 5"), (8, "#d9534f", "Critical 8")])
-
-
-@question(EQ, "Which equipment has the highest operating temperature?", ("eq",))
-def q_eq_temperature(d):
-    eq_extreme(d, "Temperature (C)", "Highest temperature", " °C", True,
-               [(80, "#e0a800", "Warning 80"), (100, "#d9534f", "Critical 100")])
-
-
-@question(EQ, "Which equipment has generated the most alerts?", ("eq",))
-def q_eq_alerts(d):
-    eq_extreme(d, "Alert Count", "Most alerts recorded", " alert(s)", True)
-
-
-@question(EQ, "Which equipment requires maintenance?", ("eq",))
-def q_eq_maintenance(d):
-    df = d["eqf"][d["eqf"][["Overdue", "Due", "Under Maintenance"]].any(axis=1)]
-    answer(f"**{len(df)}** equipment item(s) are due, overdue or under maintenance: **{', '.join(df['Equipment ID']) or 'none'}**.")
-    equipment_table(df)
-
-
-@question(EQ, "Which equipment is overdue for maintenance?", ("eq",))
-def q_eq_overdue(d):
-    df = d["eqf"][d["eqf"]["Overdue"]]
-    answer(f"**{len(df)}** equipment item(s) overdue: **{', '.join(df['Equipment ID']) or 'none'}**.")
-    equipment_table(df)
-
-
-@question(EQ, "What is the average equipment availability?", ("eq",))
-def q_eq_avg_availability(d):
-    avg = d["eq"]["Availability (%)"].mean()
-    answer(f"Average equipment availability is **{avg:.1f}%** "
-           f"({'above' if avg >= 85 else 'below'} the 85% prototype minimum).")
-    bar_chart(by_id(d["eq"], "Availability (%)"), "Availability by equipment (%)", horizontal=True,
-              lines=[(85, "#d9534f", "Min 85%")])
-
-
-@question(EQ, "Which equipment type has the highest downtime?", ("eq",))
-def q_type_downtime(d):
-    t = d["eq"].groupby("Equipment Type")["Downtime (hours)"].sum().sort_values(ascending=False)
-    names, n = leaders(t)
-    answer(f"Highest total downtime: **{names}** ({n:g} h).")
-    bar_chart(t.to_dict(), "Total downtime by equipment type (h)", horizontal=True)
-
-
-@question(EQ, "Which equipment requires immediate inspection?", ("eq",))
-def q_eq_inspection(d):
-    df = d["eqf"]
-    df = df[(df["Condition"] == "Critical") | df["Overdue"]].assign(
-        Reason=lambda x: [", ".join(r for r, on in (("Critical condition", c == "Critical"), ("Overdue maintenance", o))
-                                    if on) for c, o in zip(x["Condition"], x["Overdue"])])
-    answer(f"**{len(df)}** equipment item(s) need immediate inspection: **{', '.join(df['Equipment ID']) or 'none'}**.")
-    show_table(df[["Equipment ID", "Equipment Type", "Temperature (C)", "Vibration (mm/s)", "Condition", "Reason"]])
-
-
-# Combination of Safe and Equipment
-IN = "Integrated Safety and Equipment Analysis"
-
-
-@question(IN, "Are safety incidents associated with particular shifts?", ("inc",))
-def q_shift_association(d):
-    inc = d["inc"]
-    counts = inc["Shift"].value_counts()
-    share = (counts / counts.sum() * 100).round(0).astype(int)
-    answer("Share of incidents by shift: " + ", ".join(f"**{k}** {share[k]}% ({counts[k]})" for k in counts.index) + ".")
-    if not d["w"].empty:
-        workers = d["w"]["Shift"].value_counts()
-        rate = (counts / workers.reindex(counts.index)).dropna().round(2)
-        if len(rate):
-            st.write("Incidents per recorded worker on the shift: " + ", ".join(f"**{k}** {v}" for k, v in rate.items()))
-    stacked_chart(pd.crosstab(inc["Shift"], inc["Severity"]).reindex(columns=list(SEV_COLORS)).dropna(axis=1, how="all"),
-                  "Incidents by shift and severity")
-
-
-@question(IN, "Which departments have both high safety risk and high equipment downtime?", ("eq",))
-def q_dept_both(d):
-    t = dept_table(d)
-    if "Safety risk index" not in t or t["Safety risk index"].sum() == 0:
-        return st.info("No safety records with a department are available for this question yet.")
-    hi_s = (t["Safety risk index"] >= t["Safety risk index"].mean()) & (t["Safety risk index"] > 0)
-    hi_d = (t["Equipment downtime (h)"] >= t["Equipment downtime (h)"].mean()) & (t["Equipment downtime (h)"] > 0)
-    both = t[hi_s & hi_d]
-    answer(f"Departments high on both: **{', '.join(both.index) or 'none'}**.")
-    st.caption("High = at or above the average of all departments listed. Equipment downtime is linked to departments "
-               "by equipment type (e.g. haul trucks and loaders: Mobile Equipment Maintenance; crushers and conveyors: "
-               "Fixed Plant Maintenance; drills and winches: Mining Operations).")
-    show_table(t.assign(**{"High on both": (hi_s & hi_d).map({True: "Yes", False: "No"})}).reset_index(names="Department"))
-
-
-@question(IN, "Which equipment contributes to the greatest number of alerts?", ("eq",))
-def q_eq_alert_sources(d):
-    ids = pd.Series([a["ID"] for a in d["alerts"] if a["ID Type"] == "Equipment ID"], dtype=str).value_counts()
-    if ids.empty:
-        return st.success("There are no active equipment alerts.")
-    names, n = leaders(ids)
-    answer(f"Most active alerts: **{names}** ({n} alert{'s' if n != 1 else ''}: temperature, vibration, overdue maintenance, downtime).")
-    bar_chart(ids.to_dict(), "Active alerts per equipment", horizontal=True)
-
-
-@question(IN, "Which equipment should receive maintenance priority?", ("eq",))
-def q_priority(d):
-    pri = d["eqf"][d["eqf"]["Flag Count"] > 0].sort_values(["Overdue", "Flag Count", "Availability (%)"],
-                                                           ascending=[False, False, True])
-    if pri.empty:
-        return st.success("No equipment currently requires maintenance attention.")
-    answer(f"Maintenance priority order: **{', '.join(pri['Equipment ID'])}** (overdue first, then most flags, then lowest availability).")
-    equipment_table(pri)
-
-
-@question(IN, "What are the most common causes of safety incidents?", ("inc",))
-def q_causes(d):
-    counts = d["inc"]["Cause"].str.strip().str.capitalize().value_counts()
-    names, n = leaders(counts)
-    answer(f"Most common cause: **{names}** ({n} incident{'s' if n != 1 else ''}).")
-    bar_chart(counts.head(10).to_dict(), "Most common causes", horizontal=True)
-
-
-@question(IN, "Which safety indicators require management intervention?")
-def q_indicators(d):
-    w, inc, rk, rows = d["w"], d["inc"], d["rk"], []
-
-    def row(name, value, target, bad):
-        rows.append({"Indicator": name, "Value": value, "Target": target, "Level": "Warning" if bad else "Normal",
-                     "Management action": "Intervene" if bad else "None"})
-
-    if not w.empty:
-        ppe = (w["PPE"] == "Yes").mean() * 100
-        row("PPE compliance", f"{ppe:.0f}%", "100%", ppe < 100)
-        row("Workers with fatigue 8 or more", int((w["Fatigue Level"].astype(int) >= 8).sum()), "0",
-            (w["Fatigue Level"].astype(int) >= 8).any())
-        row("Workers without safety training", int((w["Training"] == "No").sum()), "0", (w["Training"] == "No").any())
-        row("High-risk workers", int((w["Risk Level"] == "High").sum()), "0", (w["Risk Level"] == "High").any())
-    if not inc.empty:
-        open_hc = int(((inc["Status"] != "Closed") & inc["Severity"].isin(["High", "Critical"])).sum())
-        lti = int((inc["Lost-Time Injury"] == "Yes").sum())
-        row("Open High/Critical incidents", open_hc, "0", open_hc > 0)
-        row("Lost-time injuries", lti, "0", lti > 0)
-    if not rk.empty:
-        hc = int(rk["Classification"].isin(["High", "Critical"]).sum())
-        row("High/Critical risk assessments", hc, "0", hc > 0)
-    if not rows:
-        return st.info("No worker, incident or risk records are available for this question yet.")
-    df = pd.DataFrame(rows)
-    answer(f"**{int((df['Level'] == 'Warning').sum())}** of {len(df)} safety indicators need management intervention.")
-    show_table(df)
-
-
-@question(IN, "What percentage of monitored equipment is operating normally?", ("eq",))
-def q_normal(d):
-    n = d["eq"]["Condition"].value_counts()
-    answer(f"**{n.get('Normal', 0) / len(d['eq']) * 100:.0f}%** of monitored equipment is operating normally "
-           f"({int(n.get('Normal', 0))} of {len(d['eq'])}).")
-    bar_chart({k: int(n.get(k, 0)) for k in COND_COLORS}, "Equipment condition", colors=COND_COLORS)
-
-
-@question(IN, "How many critical alerts are currently active?")
-def q_critical_alerts(d):
-    crit = [a for a in d["alerts"] if a["Level"] == "Critical"]
-    answer(f"**{len(crit)}** critical alert(s) are active out of {len(d['alerts'])} active alerts.")
-    if crit:
-        show_table(pd.DataFrame(crit)[["Level", "Category", "ID Type", "ID", "Value", "Status"]])
-
-
-@question(IN, "Which areas of the operation require the greatest attention?")
-def q_areas(d):
-    t = dept_table(d)
-    if t.empty:
-        return st.info("No safety or equipment records are available for this question yet.")
-    if not d["inc"].empty:
-        loc = d["inc"]["Location"].astype(str).str.strip().value_counts()
-        names, n = leaders(loc)
-        answer(f"Location with the most incidents: **{names}** ({n}).")
-        bar_chart(loc.head(8).to_dict(), "Incidents by location", horizontal=True)
-    if "Safety risk index" in t and t["Safety risk index"].sum() > 0:
-        names, n = leaders(t["Safety risk index"])
-        st.write(f"Department with the highest safety risk: **{names}** (index {n}).")
-    st.markdown("**Departments**")
-    show_table(t.reset_index(names="Department"))
-
-
-@question(IN, "What recommendations can be generated from the monitoring results?")
-def q_recommendations(d):
-    w, inc, rk, eqf, rec = d["w"], d["inc"], d["rk"], d["eqf"], []
-    crit = sum(a["Level"] == "Critical" for a in d["alerts"])
-    if crit:
-        rec.append(f"Resolve the **{crit}** active critical alert(s) first (see the Alerts section).")
-    if not w.empty:
-        if (w["PPE"] == "No").any():
-            rec.append(f"Enforce PPE: **{int((w['PPE'] == 'No').sum())}** worker(s) are not wearing full PPE.")
-        if (w["Training"] == "No").any():
-            rec.append(f"Complete safety training for **{int((w['Training'] == 'No').sum())}** worker(s).")
-        if (w["Fatigue Level"].astype(int) >= 8).any():
-            rec.append("Rest or reassign workers reporting fatigue of 8 or more.")
-    if not inc.empty:
-        open_hc = inc[(inc["Status"] != "Closed") & inc["Severity"].isin(["High", "Critical"])]
-        if len(open_hc):
-            rec.append(f"Close out the **{len(open_hc)}** open High/Critical incident(s): {', '.join(open_hc['Incident ID'])}.")
-        shifts = inc["Shift"].value_counts()
-        if len(shifts) > 1 and shifts.iloc[0] > shifts.iloc[1]:
-            rec.append(f"Review supervision and controls on **{shifts.index[0]}**, which has the most incidents.")
-    if not rk.empty and rk["Classification"].isin(["High", "Critical"]).any():
-        rec.append("Implement additional controls for the High/Critical risk assessments.")
-    if not eqf.empty:
-        for flag, text in (("Overdue", "Schedule overdue maintenance immediately for"),
-                           ("Excessive Downtime", "Investigate excessive downtime of"),
-                           ("Low Availability", "Improve availability of")):
-            ids = eqf.loc[eqf[flag], "Equipment ID"].tolist()
-            if ids:
-                rec.append(f"{text}: **{', '.join(ids)}**.")
-        crit_eq = eqf.loc[eqf["Condition"] == "Critical", "Equipment ID"].tolist()
-        if crit_eq:
-            rec.append(f"Inspect equipment in critical condition: **{', '.join(crit_eq)}**.")
-    if not rec:
-        return st.success("No intervention is required based on the current records.")
-    st.markdown("\n".join(f"- {r}" for r in rec))
-
-
-def analysis_categories(role):
-    pages = PAGES.get(role, [])
-    safety = "Safety Incidents" in pages or "Worker Safety Data" in pages
-    equip = "Equipment Data" in pages
-    return [c for c, ok in ((HS, safety), (EQ, equip), (IN, safety and equip)) if ok]
-
-
-def page_analysis():
-    st.header("Interactive Data Analysis")
-    cats = analysis_categories(S["role"])
-    c1, c2 = st.columns([1, 2])
-    cat = c1.selectbox("Question category", cats)
-    q = c2.selectbox("Question", list(QUESTIONS[cat]))
-
-    inc = pd.DataFrame(S["incidents"])
-    dates = pd.to_datetime(inc["Date"], errors="coerce").dropna() if not inc.empty else pd.Series(dtype="datetime64[ns]")
-    d1, d2 = st.columns(2)
-    start = d1.date_input("Period from (incidents)", value=dates.min().date() if len(dates) else date.today() - timedelta(days=30))
-    end = d2.date_input("Period to (incidents)", value=max(dates.max().date(), date.today()) if len(dates) else date.today())
-
-    if not inc.empty:
-        inc["Date"] = pd.to_datetime(inc["Date"], errors="coerce")
-        inc = inc[(inc["Date"] >= pd.Timestamp(start)) & (inc["Date"] <= pd.Timestamp(end))]
-    eq = equipment_df()
-    data = {"w": pd.DataFrame(S["workers"]), "inc": inc, "eq": eq, "rk": pd.DataFrame(S["risks"]),
-            "eqf": add_flags(eq.copy()) if not eq.empty else eq, "alerts": generate_alerts(S["role"]),
-            "start": start, "end": end}
-    st.subheader(q)
-    QUESTIONS[cat][q](data)
-
-
-    ####Logout
-
-    if st.sidebar.button("Logout"):
-        st.session_state["logged_in"] = False
-        st.session_state["role"] = ""
-
-        st.rerun()
+    # j) Interactive Data Analysis (the questions and charts are in the analysis section above)
+    elif selected_page == "Data Analysis":
+        page_analysis(page)
          
