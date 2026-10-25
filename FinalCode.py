@@ -1,8 +1,10 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import time
 import csv
 import os
+import base64
 import plotly.graph_objects as go
 from datetime import date, datetime, timedelta
 
@@ -11,6 +13,7 @@ from datetime import date, datetime, timedelta
 st.set_page_config(page_title="KHWEZI MINING", page_icon=":pick:", layout="wide")
 
 BASE = os.path.dirname(os.path.abspath(__file__))   # data files live next to this program
+
 
 # SHARED HELPERS (written once, used by the dashboard, alerts logic and analysis)
 # =====================================================================
