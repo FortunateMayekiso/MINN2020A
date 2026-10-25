@@ -3,7 +3,6 @@ import pandas as pd
 import time
 import csv
 import os
-import base46
 import plotly.graph_objects as go
 from datetime import date, datetime, timedelta
 
