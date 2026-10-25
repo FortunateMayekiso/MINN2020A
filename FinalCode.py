@@ -916,7 +916,7 @@ else:
         incident_id = st.text_input("Incident ID")
         incident_worker_id = st.text_input("Worker ID")
         incident_department = st.selectbox("Department", ["<CHOOSE>"] + DEPTS)
-         incident_shift = st.selectbox("Shift", ["<CHOOSE>", "Day Shift", "Night Shift"])
+        incident_shift = st.selectbox("Shift", ["<CHOOSE>", "Day Shift", "Night Shift"])
         incident_date = st.date_input("Date of incident", value=date.today())
         location = st.text_area("Location of the incident", placeholder= "Where did the incident happen...")
         incident_type = st.text_area("Type of incident", placeholder = "What type...")
