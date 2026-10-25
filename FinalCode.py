@@ -1186,7 +1186,7 @@ else:
                 st.bar_chart(data["Condition"].value_counts())
 
    # f) Equipment Maintenance Monitoring 
-   elif selected_page == "Maintenance Data":
+    elif selected_page == "Maintenance Data":
         st.header("Equipment Maintenance Monitoring")
 
         if "maintenance_message" in st.session_state:       # message saved before st.rerun()
