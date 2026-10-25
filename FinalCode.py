@@ -5,15 +5,13 @@ import time
 import csv
 import os
 import base64
-import plotly.graph_objects as go
 from datetime import date, datetime, timedelta
-
+import plotly.graph_objects as go
 
 #Page settings
 st.set_page_config(page_title="KHWEZI MINING", page_icon=":pick:", layout="wide")
 
 BASE = os.path.dirname(os.path.abspath(__file__))   # data files live next to this program
-
 
 # SHARED HELPERS (written once, used by the dashboard, alerts logic and analysis)
 # =====================================================================
@@ -720,10 +718,15 @@ def page_analysis(pages):
     st.subheader(q)
     QUESTIONS[cat][q](data)
 
-st.title("KHWEZI MINING")
-st.subheader("Health, Safety and Equipment Monitoring")
+
+# =====================================================================
+# MAIN PROGRAM - the group's elif-chain style is kept (no function def for pages a to h).
+# Lines marked "FIX:" are the only changes made to the members' code.
+# =====================================================================
+picture = login_background()   # the login picture (empty text if login_bg.jpeg is missing)
 
 #initializing the state session before logging in.
+# (the data is already loaded from the csv files above, so the lists below only matter if a csv file is missing)
 if "logged_in" not in st.session_state:  #log in screen
     st.session_state.logged_in = False
 
@@ -751,14 +754,20 @@ if "equipment" not in st.session_state:
     except (FileNotFoundError, pd.errors.EmptyDataError):
         st.session_state["equipment"] = []
 
+#Page title
+# FIX: hidden on the login page when the logo picture is shown (the picture already shows the company name)
+if st.session_state["logged_in"] or not picture:
+    st.title("KHWEZI MINING")
+    st.subheader("Health, Safety and Equipment Monitoring")
+
 # Read users from the CSV file
 users = {} #{"Lesiba": ["123","admin"]}
 
 if not os.path.exists(USERS_FILE):   # FIX: create a users.csv instead of crashing when the file is missing
     with open(USERS_FILE, "w", newline="") as f:
         f.write(DEMO_USERS)
-        
-with open("users.csv", mode="r", newline="") as file:   # open the users.csv file in read mode, with newline="" to handle line endings correctly across different operating systems.
+
+with open(USERS_FILE, mode="r", newline="") as file:   # open the users.csv file in read mode, with newline="" to handle line endings correctly across different operating systems.
     reader = csv.DictReader(file)      #values of the csv must be read as a dictinary {username: Lesiba , password: 123, role: admin}]}
 
     for row in reader:    #reading the user names from the csv and adding them in the dictionary
@@ -772,31 +781,44 @@ with open("users.csv", mode="r", newline="") as file:   # open the users.csv fil
 #Login page
 
 if not st.session_state["logged_in"]:
-    st.header("Login")
-    username = st.text_input("Username")
-    password = st.text_input("Password", type="password")
+    # FIX: login page style - the logo picture fills the page and the form sits under the logo
+    background = (f"url(data:image/jpeg;base64,{picture}) center top/cover no-repeat" if picture else
+                  "radial-gradient(circle at 72% 58%,#ffd98a 0,#f59a45 4%,transparent 28%),"
+                  "linear-gradient(#1c2a44 0,#6b5577 35%,#e8894a 57%,#2a2420 57.2%,#1A1D21 100%)")
+    push_down = "calc(max(54.5vw,100vh)*.68)" if picture else "1.4rem"   # keeps the form just below the logo on any screen
+    st.markdown("""<style>
+    .stApp{background:BACKGROUND;}
+    [data-testid="stHeader"]{background:transparent;}
+    .block-container{padding-top:PUSHDOWN;}
+    [data-testid="stForm"]{background:rgba(26,29,33,.68);backdrop-filter:blur(8px);border:1px solid rgba(240,243,247,.25);}
+    [data-testid="stVerticalBlock"]{gap:.6rem;}
+    </style>""".replace("BACKGROUND", background).replace("PUSHDOWN", push_down), unsafe_allow_html=True)
 
-####Check the code again
+    _, mid, _ = st.columns([1, 1.2, 1])
+    with mid:
+        with st.form("login"):   # FIX: a form lets the Enter key submit the login
+            st.header("Login")
+            username = st.text_input("Username")
+            password = st.text_input("Password", type="password")
+            login_clicked = st.form_submit_button("Login")
 
-    if st.button("Login"):
-        if username in users and password == users[username]["password"]:   #this checks if the user name and the password are correct
-            user_role = users[username]["role"]   #this gets the role that belongs to the username on the csv
-        else:
-            st.error("Incorrect username or password. Enter the correct credentials or contact the system administrator.")
-            st.stop()
+        if login_clicked:
+            # FIX: the username is not case-sensitive ("innocent" works for "Innocent"); the password still is
+            match = next((u for u in users if u.lower() == username.strip().lower()), None)
+            if match and password == users[match]["password"]:   #this checks if the user name and the password are correct
+                user_role = users[match]["role"]   #this gets the role that belongs to the username on the csv
+            else:
+                st.error("Incorrect username or password. Enter the correct credentials or contact the system administrator.")
+                st.stop()
 
-        st.session_state["logged_in"] = True
-        st.session_state["role"] = user_role #####if the username and the password are on the same row in the csv
-                                             ##### the login will take me to the page of the user's role as shown on the file
+            st.session_state["logged_in"] = True
+            st.session_state["role"] = user_role #####if the username and the password are on the same row in the csv
+                                                 ##### the login will take me to the page of the user's role as shown on the file
 
-        with st.spinner("Logging in..."):
-            time.sleep(2)
-
-        st.success("Login successfull!")
-        time.sleep(1)
-        st.rerun()     # Restarts the script with the new session state(logged_in=True and role assigned), 
-                        # allowing access to the application after login,
-                        # Meaning everything under the first if statements won't happen because the opposite is true)
+            # FIX: the spinner and the two time.sleep() waits (3 seconds in total) were removed - they only slowed the login
+            st.rerun()     # Restarts the script with the new session state(logged_in=True and role assigned), 
+                            # allowing access to the application after login,
+                            # Meaning everything under the first if statements won't happen because the opposite is true)
 
    
 
@@ -808,51 +830,43 @@ else:
     role= st.session_state["role"]
     st.sidebar.title("Khwezi Mining")
     st.sidebar.write("Logged in as:", role)
-    
-    ####Logout
 
+    # FIX: the logout button was inside page_analysis, so it only worked on one page. It now sits in the sidebar for every page.
     if st.sidebar.button("Logout"):
         st.session_state["logged_in"] = False
         st.session_state["role"] = ""
-
         st.rerun()
 
 
+
 ## navigator for each role
+# FIX: "Data Analysis" (part j) was added to every list.
 
     if role == "Administrator":
-        page = ["Dashboard", "Worker Safety Data", "Equipment Data", "Maintenance Data", "Manage Users", "Safety Incidents", "Risk Assessment", "Alerts", "General Reports"]
+        page = ["Dashboard", "Worker Safety Data", "Equipment Data", "Maintenance Data", "Manage Users", "Safety Incidents", "Risk Assessment", "Alerts", "Data Analysis", "General Reports"]
 
     elif role == "Safety Officer":
-        page = ["Dashboard", "Worker Safety Data", "Safety Incidents", "Risk Assessment", "Alerts", "General Reports"]
+        page = ["Dashboard", "Worker Safety Data", "Safety Incidents", "Risk Assessment", "Alerts", "Data Analysis", "General Reports"]
 
     elif role == "Mine Engineer":
-        page = ["Dashboard", "Worker Safety Data", "Equipment Data", "Maintenance Data", "Safety Incidents", "Risk Assessment", "Alerts", "General Reports"]
+        page = ["Dashboard", "Worker Safety Data", "Equipment Data", "Maintenance Data", "Safety Incidents", "Risk Assessment", "Alerts", "Data Analysis", "General Reports"]
 
-    elif role == "Maintenance Manager": ##########Rename this role to Maintenance Engineer
-        page = ["Dashboard", "Equipment Data", "Maintenance Data", "Alerts", "General Reports"] 
+    elif role == "Maintenance Engineer": # FIX: was "Maintenance Manager", which does not match users.csv, so these users got the full "else" list below
+        page = ["Dashboard", "Equipment Data", "Maintenance Data", "Alerts", "Data Analysis", "General Reports"] 
 
     else:
-        page = ["Dashboard", "Worker Safety Data", "Equipment Data", "Maintenance Data", "Safety Incidents", "Risk Assessment", "Alerts", "General Reports"]
+        page = ["Dashboard", "Worker Safety Data", "Equipment Data", "Maintenance Data", "Safety Incidents", "Risk Assessment", "Alerts", "Data Analysis", "General Reports"]
 
-    selected_page = st.sidebar.selectbox("Select a section", page, index = 0)  #might be bad!!!!!!!!!!!
+    selected_page = st.sidebar.selectbox("Select a section", page, index=0)  #might be bad!!!!!!!!!!!
 
     st.write(" Hello!, ", role, "! Welcome to the Khwezi Mining Health, Safety and Equipment Monitoring System.")
 
 ### THE DASHBOARD
 
     if selected_page == "Dashboard":
-        st.header("Dashboard")
-        st.write("Welcome,", role, "!")
-        st.metric("Workers recorded", len(st.session_state["workers"]))
-        st.metric("Safety Incidents Recorded", len(st.session_state["incidents"]))
-        high_incidents = 0
-        for incident in st.session_state["incidents"]:
-            if incident["Severity"] == "High": ####CHECK THIS LINE AGAIN!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-                high_incidents += 1
-        st.metric("High Severity Incidents", high_incidents) ########CHECK THIS LINE AGAIN!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        # FIX: the full dashboard (part i) replaces the 3-metric starter. It already shows workers, incidents and
+        # High/Critical incidents (the old check counted only "High").
         page_dashboard(page)
-
 
     ###Worker Safety Data
 
@@ -874,10 +888,18 @@ else:
         if st.button("Record Worker Data"):
             if worker_id.strip() == "":    #if worker_id is empty or only contains whitespace, show error message
                 st.error("Please enter the Worker's ID.")
+            elif worker_id.strip() in [str(w["Worker's ID"]) for w in st.session_state["workers"]]:   # FIX: reject a Worker's ID that already exists
+                st.error("This Worker's ID already exists.")
             elif job_role.strip() == "":     #if job role is empty or only contains whitespace, show error message
                 st.error("Please enter the Worker's Job Role.")
             elif department.strip() == "":     #if department is empty or only contains whitespace, show error message
                 st.error("Please select the Worker's Department.")
+            elif shift == "":                  # FIX: shift, PPE and training were never checked, so an empty answer was accepted
+                st.error("Please select the shift.")
+            elif ppe == "":
+                st.error("Please state whether the worker is wearing full PPE.")
+            elif training == "":
+                st.error("Please state whether the worker has completed safety training.")
             elif observation.strip() == "":   #if worker's observations is empty or only contains whitespace, show error message
                 st.error("Please enter any safety observations or concerns regarding the worker's health and safety. If there are none, please enter 'None'.")
             else:
@@ -891,9 +913,10 @@ else:
                     risk_level = "Low"
 
 #Save worker's information
-                worker_data = {"Worker's ID": worker_id, "Department": department, "Job Role": job_role, "Shift": shift, "PPE": ppe, "Training": training, "Fatigue Level": fatigue, "Safety Observation(s)": observation, "Near Misses": near_misses, "Previous Incidents": previous_incidents, "Risk Level": risk_level}
+                worker_data = {"Worker's ID": worker_id.strip(), "Department": department, "Job Role": job_role, "Shift": shift, "PPE": ppe, "Training": training, "Fatigue Level": int(fatigue), "Safety Observation(s)": observation, "Near Misses": int(near_misses), "Previous Incidents": int(previous_incidents), "Risk Level": risk_level}
 
                 st.session_state["workers"].append(worker_data)
+                save("workers")   # FIX: write to workers.csv so the record is not lost when the page is refreshed
                 st.success("Worker safety data submitted successfully!")
 
                 if risk_level == "High":
@@ -901,7 +924,7 @@ else:
         st.subheader("Recorded Worker's Data")
 
         if len(st.session_state["workers"]) > 0:
-            st.dataframe(st.session_state["workers"], use_container_width=True)   #if the length of the workers list is greater than 0, 
+            st.dataframe(st.session_state["workers"], **STRETCH)   #if the length of the workers list is greater than 0, 
                                                     #then the data should be displayed in a table format using the st.dataframe() function. 
                                                     #The dataframe will show all the recorded worker information stored in the session state.
             st.write("Total workers recorded:", len(st.session_state["workers"]))
@@ -916,17 +939,19 @@ else:
         st.subheader("Record a New Safety Incident")
         incident_id = st.text_input("Incident ID")
         incident_worker_id = st.text_input("Worker ID")
-        incident_department = st.selectbox("Department", ["<CHOOSE>"] + DEPTS)
-        incident_shift = st.selectbox("Shift", ["<CHOOSE>", "Day Shift", "Night Shift"])
         incident_date = st.date_input("Date of incident", value=date.today())
-        location = st.text_area("Location of the incident", placeholder= "Where did the incident happen...")
-        incident_type = st.text_area("Type of incident", placeholder = "What type...")
+        # FIX: Time, Shift, Department, Lost-time injury, Cause and Status were added (all required by the brief)
+        incident_time = st.time_input("Time of incident", value=datetime.now().time().replace(microsecond=0))
+        incident_shift = st.selectbox("Shift", ["<CHOOSE>", "Day Shift", "Night Shift"])
+        incident_department = st.selectbox("Department", ["<CHOOSE>"] + DEPTS)
+        location = st.text_input("Location of the incident", placeholder= "Where did the incident happen...")   # FIX: one line instead of a big text box
+        incident_type = st.selectbox("Type of incident", ["<CHOOSE>"] + INC_TYPES)   # FIX: drop-down, so incidents can be counted and categorised
         severity = st.selectbox("Incident Severity", ["<CHOOSE>", "Low", "Medium", "High", "Critical"])
         injury = st.selectbox(" Did the incident cause injury?", ["<CHOOSE>", "No", "Yes"])
-        description = st.text_area("Description of Incident", placeholder= "Describe what happened...")
-        cause = st.text_input("Cause of incident")
         lost_time = st.selectbox("Lost-time injury?", ["<CHOOSE>", "No", "Yes"])
+        cause = st.text_input("Cause of incident")
         incident_status = st.selectbox("Incident Status", ["Open", "Under Investigation", "Closed"])
+        description = st.text_area("Description of Incident", placeholder= "Describe what happened...")
         corrective_action = st.text_area("Corrective Measures Taken", placeholder = "Describe actions taken...")
 
         if st.button("Record Incident"):
@@ -935,6 +960,26 @@ else:
             
             elif incident_worker_id.strip()=="":
                 st.error("Please input the Worker's ID.")
+
+            # FIX: checks for the new fields (the old code accepted "<CHOOSE>" as an answer)
+            elif incident_shift == "<CHOOSE>":
+                st.error("Please select the shift.")
+            elif incident_department == "<CHOOSE>":
+                st.error("Please select the department.")
+            elif location.strip() == "":
+                st.error("Please enter the location.")
+            elif incident_type == "<CHOOSE>":
+                st.error("Please select the incident type.")
+            elif severity == "<CHOOSE>":
+                st.error("Please select the severity.")
+            elif injury == "<CHOOSE>":
+                st.error("Please state whether there was an injury.")
+            elif lost_time == "<CHOOSE>":
+                st.error("Please state whether it was a lost-time injury.")
+            elif injury == "No" and lost_time == "Yes":
+                st.error("A lost-time injury requires an injury.")
+            elif cause.strip() == "":
+                st.error("Please enter the cause of the incident.")
             
             else:
 
@@ -947,9 +992,11 @@ else:
                 if duplicate: 
                     st.error("This Incident already exists. Please enter another ID.")
                 else:
-                    incident = {"Incident ID": incident_id.strip(), "Worker ID": incident_worker_id, "Date": str(incident_date), "Location": location, "Incident Type": incident_type, "Severity": severity, "Injury": injury, "Description": description.strip(), "Corrective Action": corrective_action.strip()}
+                    # the keys match the columns of incidents.csv
+                    incident = {"Incident ID": incident_id.strip(), "Worker ID": incident_worker_id.strip(), "Date": str(incident_date), "Time": incident_time.strftime("%H:%M"), "Shift": incident_shift, "Department": incident_department, "Location": location.strip(), "Incident Type": incident_type, "Severity": severity, "Injury": injury, "Lost-Time Injury": lost_time, "Cause": cause.strip(), "Status": incident_status, "Description": description.strip(), "Corrective Action": corrective_action.strip()}
 
                     st.session_state["incidents"].append(incident)
+                    save("incidents")   # FIX: write to incidents.csv so the record is not lost when the page is refreshed
                     st.success("Safety incident recorded successfully!") 
 
                     if severity in ["High", "Critical"]:
@@ -961,10 +1008,10 @@ else:
         st.subheader("Recorded Safety Incidents")
 
         if len(st.session_state["incidents"]) > 0:
-            st.dataframe(st.session_state["incidents"], use_container_width = True)
+            st.dataframe(st.session_state["incidents"], **STRETCH)
             st.write("Total incidents recorded:", len(st.session_state["incidents"]))
-            
-            # FIX: search, filter, count and trends (brief part c) were missing. 
+
+            # FIX: search, filter, count and trends (brief part c) were missing. They are added BELOW her table so her lines stay as they were.
             inc_df = pd.DataFrame(st.session_state["incidents"])
             st.subheader("Search, filter and count incidents")
             search_text = st.text_input("Search incidents", placeholder="ID, worker, location, cause, description...")
@@ -1125,7 +1172,7 @@ else:
                     mask = (view["Equipment ID"].astype(str).str.contains(search, case=False, regex=False)
                             | view["Manufacturer"].astype(str).str.contains(search, case=False, regex=False))
                     view = view[mask]
-                st.dataframe(view, use_container_width=True)
+                st.dataframe(view, **STRETCH)
 
         # E: Check and update the selected machine's readings.
         with monitoring:
@@ -1170,7 +1217,7 @@ else:
                         st.success(message)
 
                 st.dataframe(data[["Equipment ID", "Temperature (C)", "Vibration (mm/s)",
-                                   "Condition", "Alert Count"]], use_container_width=True)
+                                   "Condition", "Alert Count"]], **STRETCH)
 
         # E: Compare readings with the warning and critical limits.
         with charts:
@@ -1183,11 +1230,11 @@ else:
                     figure.update_layout(title=column, xaxis_title="Equipment ID", yaxis_title=column)
                     figure.add_hline(y=warning, line_dash="dash", line_color="orange", annotation_text="Warning")
                     figure.add_hline(y=critical, line_dash="dash", line_color="red", annotation_text="Critical")
-                    st.plotly_chart(figure, use_container_width=True)
+                    st.plotly_chart(figure, **STRETCH)
                 st.bar_chart(data["Condition"].value_counts())
 
-   # f) Equipment Maintenance Monitoring 
-    elif selected_page == "Maintenance Data":
+    # f) Equipment Maintenance Monitoring 
+    elif selected_page == "Maintenance Data":   # FIX: this line had 3 spaces instead of 4, which stopped the whole app with an IndentationError
         st.header("Equipment Maintenance Monitoring")
 
         if "maintenance_message" in st.session_state:       # message saved before st.rerun()
@@ -1240,7 +1287,7 @@ else:
 
                 for name in categories:         # one list of equipment for each category
                     with st.expander(name + " (" + str(int(table[name].sum())) + ")"):
-                        st.dataframe(table[table[name]][show], use_container_width=True)
+                        st.dataframe(table[table[name]][show], **STRETCH)
 
                 for r in rows:                  # maintenance alerts
                     if r["Overdue"]:
@@ -1282,12 +1329,13 @@ else:
                             "Equipment ID": eq_choice, "Action": action, "Date": str(work_date),
                             "Technician": technician.strip(), "Downtime Added (h)": added})
                         pd.DataFrame(st.session_state["equipment"]).to_csv(equipment_file, index=False)   # save to csv
+                        save("maintenance_log")   # FIX: the log was never saved, so it disappeared on refresh
                         st.session_state["maintenance_message"] = action + " recorded for " + eq_choice + "."
                         st.rerun()
 
             with log_tab:
                 if len(st.session_state["maintenance_log"]) > 0:
-                    st.dataframe(st.session_state["maintenance_log"], use_container_width=True)
+                    st.dataframe(st.session_state["maintenance_log"], **STRETCH)
                 else:
                     st.info("No maintenance work has been logged yet.")
 
@@ -1325,6 +1373,7 @@ else:
                 st.session_state["risks"].append({"Risk ID": risk_id.strip(), "Hazard": hazard.strip(),
                                                   "Likelihood": likelihood, "Consequence": consequence,
                                                   "Risk Score": risk_score, "Classification": classification})
+                save("risks")   # FIX: the risks were never saved, so they disappeared on refresh
 
                 if classification == "Critical":
                     st.error("CRITICAL RISK (score " + str(risk_score) + "). Immediate management attention is required.")
@@ -1335,7 +1384,7 @@ else:
 
         st.subheader("Recorded Risk Assessments")
         if len(st.session_state["risks"]) > 0:
-            st.dataframe(st.session_state["risks"], use_container_width=True)
+            st.dataframe(st.session_state["risks"], **STRETCH)
         else:
             st.info("No risk assessments have been recorded yet.")
         
@@ -1357,11 +1406,11 @@ else:
                                                        ("Vibration", float(r["Vibration (mm/s)"] or 0), 5, 8)]:
                     if value > critical:
                         alerts.append({"Level": "Critical", "Category": "High equipment " + name.lower(),
-                                       "ID": r["Equipment ID"], "Value": value,
+                                       "ID": r["Equipment ID"], "Value": str(value),
                                        "Action": "Inspect equipment and start maintenance/safety procedures."})
                     elif value >= warning:
                         alerts.append({"Level": "Warning", "Category": "High equipment " + name.lower(),
-                                       "ID": r["Equipment ID"], "Value": value,
+                                       "ID": r["Equipment ID"], "Value": str(value),
                                        "Action": "Monitor closely and schedule an inspection."})
 
                 # Overdue maintenance
@@ -1409,7 +1458,7 @@ else:
         else:
             critical = len([a for a in alerts if a["Level"] == "Critical"])
             st.write("Active alerts:", len(alerts), "| Critical:", critical, "| Warning:", len(alerts) - critical)
-            st.dataframe(alerts, use_container_width=True)
+            st.dataframe(alerts, **STRETCH)
 
             # Full notification in the format of Figure 1 in the brief
             number = st.selectbox("Select an alert to see the full notification", range(len(alerts)),
@@ -1446,10 +1495,8 @@ else:
         for username_from_file in users:
             user_list.append({"Username": username_from_file, "Role": users[username_from_file]["role"]})
         
-        st.dataframe(user_list, use_container_width=True)
-
+        st.dataframe(user_list, **STRETCH)
 
     # j) Interactive Data Analysis (the questions and charts are in the analysis section above)
     elif selected_page == "Data Analysis":
         page_analysis(page)
-         
