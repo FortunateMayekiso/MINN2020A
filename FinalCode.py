@@ -28,6 +28,20 @@ if "workers" not in st.session_state:
 if "incidents" not in st.session_state:
     st.session_state["incidents"] = []
 
+if "risks" not in st.session_state:
+    st.session_state["risks"] = []              # risk assessment records (g)
+
+if "maintenance_log" not in st.session_state:
+    st.session_state["maintenance_log"] = []    # maintenance work records (f)
+
+# Load equipment here too, so Maintenance Data and Alerts work even if Equipment Data was not opened first
+equipment_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "equipment.csv")
+if "equipment" not in st.session_state:
+    try:
+        saved = pd.read_csv(equipment_file, keep_default_na=False, dtype=str)
+        st.session_state["equipment"] = saved.to_dict("records")
+    except (FileNotFoundError, pd.errors.EmptyDataError):
+        st.session_state["equipment"] = []
 
 # Read users from the CSV file
 users = {} #{"Lesiba": ["123","admin"]}
@@ -93,19 +107,19 @@ else:
 ## navigator for each role
 
     if role == "Administrator":
-        page = ["<CHOOSE>", "Dashboard", "Worker Safety Data", "Equipment Data", "Maintenance Data", "Manage Users", "Safety Incidents", "Risk Assessment", "General Reports"]
+        page = ["<CHOOSE>", "Dashboard", "Worker Safety Data", "Equipment Data", "Maintenance Data", "Manage Users", "Safety Incidents", "Risk Assessment", "Alerts", "General Reports"]
 
     elif role == "Safety Officer":
-        page = ["<CHOOSE>", "Dashboard", "Worker Safety Data", "Safety Incidents", "Risk Assessment", "General Reports"]
+        page = ["<CHOOSE>", "Dashboard", "Worker Safety Data", "Safety Incidents", "Risk Assessment", "Alerts", "General Reports"]
 
     elif role == "Mine Engineer":
-        page = ["<CHOOSE>", "Dashboard", "Worker Safety Data", "Equipment Data", "Maintenance Data", "Safety Incidents", "Risk Assessment", "General Reports"]
+        page = ["<CHOOSE>", "Dashboard", "Worker Safety Data", "Equipment Data", "Maintenance Data", "Safety Incidents", "Risk Assessment", "Alerts", "General Reports"]
 
     elif role == "Maintenance Manager": ##########Rename this role to Maintenance Engineer
-        page = ["<CHOOSE>", "Dashboard", "Equipment Data", "Maintenance Data", "General Reports"] 
+        page = ["<CHOOSE>", "Dashboard", "Equipment Data", "Maintenance Data", "Alerts", "General Reports"] 
 
     else:
-        page = ["<CHOOSE>", "Dashboard", "Worker Safety Data", "Equipment Data", "Maintenance Data", "Safety Incidents", "Risk Assessment", "General Reports"]
+        page = ["<CHOOSE>", "Dashboard", "Worker Safety Data", "Equipment Data", "Maintenance Data", "Safety Incidents", "Risk Assessment", "Alerts", "General Reports"]
 
     selected_page = st.sidebar.selectbox("Select a section", page)  #might be bad!!!!!!!!!!!
 
@@ -133,7 +147,7 @@ else:
         worker_id = st.text_input("Worker's ID")
         department = st.selectbox("Select Department", ["", "Community Relations", "Electrical Engineering", "Emergency Response", "Environmental Management", "Finance & Commercial", "Fixed Plant Maintenance", "Geology & Exploration", "Geotechnical Engineering", "Grade Control", "Human Resources & Payroll", "Mine Engineering", "Mine Surveying", "Mining Operations (Production)", "Mobile Equipment Maintenance", "Occupational Health & Safety", "Processing / Metallurgy", "Security", "Supply Chain & Logistics"])
         job_role = st.text_input("Job Role")
-        shift = st.selectbox("Select Shift", ["", Day Shift", "Night Shift"])
+        shift = st.selectbox("Select Shift", ["", "Day Shift", "Night Shift"])
         ppe = st.selectbox("Is the worker wearing full PPE?", ["", "Yes", "No"])
         training = st.selectbox("Has the worker recieved and completed safety training?", ["", "Yes", "No"])
         fatigue = st.number_input("Worker's Fatigue Level (1-10)", min_value=1, max_value=10)  ########Check this line again!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
@@ -432,14 +446,241 @@ else:
                     st.plotly_chart(figure, use_container_width=True)
                 st.bar_chart(data["Condition"].value_counts())
 
-    elif selected_page == "Maintenance Data":
-        st.header("Maintenance Data")
-        st.info("The maintenance section session still needs to be added")  #add a code here
+   # f) Equipment Maintenance Monitoring 
+   elif selected_page == "Maintenance Data":
+        st.header("Equipment Maintenance Monitoring")
 
+        if "maintenance_message" in st.session_state:       # message saved before st.rerun()
+            st.success(st.session_state.pop("maintenance_message"))
+
+        if len(st.session_state["equipment"]) == 0:
+            st.info("No equipment recorded yet. Register equipment in Equipment Data first.")
+        else:
+            today = date.today()
+            rows = []
+
+            # Check every machine and decide which maintenance categories it falls into
+            for r in st.session_state["equipment"]:
+                operating = float(r["Operating Hours"] or 0)
+                downtime = float(r["Downtime (hours)"] or 0)
+                alert_count = float(r["Alert Count"] or 0)
+                status = r["Maintenance Status"]
+                due_text = str(r["Next Maintenance Due"])       # dates are saved as text like 2026-11-01
+
+                # Availability = Operating Time / (Operating Time + Downtime) x 100
+                total = operating + downtime
+                availability = round(operating / total * 100, 1) if total > 0 else 0
+
+                under = status == "Under Maintenance"
+                overdue = (not under) and (status == "Overdue" or (due_text != "" and due_text < str(today)))
+                due = (not under) and (not overdue) and (status == "Due for Maintenance" or (
+                      due_text != "" and due_text <= str(today + timedelta(days=14))))
+
+                rows.append({"Equipment ID": r["Equipment ID"], "Availability (%)": availability,
+                             "Downtime (hours)": downtime, "Alert Count": alert_count,
+                             "Next Maintenance Due": due_text, "Maintenance Status": status,
+                             "Due": due, "Overdue": overdue, "Under Maintenance": under,
+                             "Excessive Downtime": downtime >= 500,     # 500 hours or more
+                             "Repeated Alerts": alert_count >= 3,       # 3 alerts or more
+                             "Low Availability": availability < 85})    # below 85 %
+
+            table = pd.DataFrame(rows)
+            categories = ["Due", "Overdue", "Under Maintenance", "Excessive Downtime", "Repeated Alerts", "Low Availability"]
+            show = ["Equipment ID", "Availability (%)", "Downtime (hours)", "Alert Count",
+                    "Next Maintenance Due", "Maintenance Status"]
+
+            status_tab, update_tab, log_tab = st.tabs(["F: Maintenance Status", "F: Update Maintenance", "F: Maintenance Log"])
+
+            with status_tab:
+                st.write("Average equipment availability:", round(table["Availability (%)"].mean(), 1), "%")
+
+                counts = st.columns(6)
+                for i, name in enumerate(categories):
+                    counts[i].metric(name, int(table[name].sum()))
+
+                for name in categories:         # one list of equipment for each category
+                    with st.expander(name + " (" + str(int(table[name].sum())) + ")"):
+                        st.dataframe(table[table[name]][show], use_container_width=True)
+
+                for r in rows:                  # maintenance alerts
+                    if r["Overdue"]:
+                        st.error(r["Equipment ID"] + ": maintenance is overdue. Schedule maintenance immediately.")
+                    if r["Excessive Downtime"]:
+                        st.warning(r["Equipment ID"] + ": excessive downtime. Investigate the causes.")
+
+            with update_tab:
+                ids = [r["Equipment ID"] for r in st.session_state["equipment"]]
+                with st.form("maintenance_form", clear_on_submit=True):
+                    eq_choice = st.selectbox("Equipment", ids)
+                    action = st.selectbox("Action", ["Start maintenance", "Complete maintenance"])
+                    work_date = st.date_input("Date", value=date.today())
+                    technician = st.text_input("Technician / Maintenance Engineer")
+                    interval = st.number_input("Days until next maintenance (when completing)", min_value=1, value=90)
+                    added = st.number_input("Downtime hours to add", min_value=0.0)
+                    save_work = st.form_submit_button("Save Maintenance Record")
+
+                if save_work:
+                    record = next(r for r in st.session_state["equipment"] if r["Equipment ID"] == eq_choice)
+                    if technician.strip() == "":
+                        st.error("Please enter the technician's name.")
+                    elif action == "Start maintenance" and record["Maintenance Status"] == "Under Maintenance":
+                        st.error("This equipment is already under maintenance.")
+                    elif action == "Complete maintenance" and record["Maintenance Status"] != "Under Maintenance":
+                        st.error("Only equipment under maintenance can be completed. Start maintenance first.")
+                    else:
+                        record["Downtime (hours)"] = float(record["Downtime (hours)"] or 0) + added
+                        if action == "Start maintenance":
+                            record["Maintenance Status"] = "Under Maintenance"
+                        else:
+                            record["Maintenance Status"] = "Operational"
+                            record["Last Maintenance"] = str(work_date)
+                            record["Next Maintenance Due"] = str(work_date + timedelta(days=int(interval)))
+                            record["Alert Count"] = 0
+
+                        st.session_state["maintenance_log"].append({
+                            "Log ID": "MNT-" + str(len(st.session_state["maintenance_log"]) + 1).zfill(3),
+                            "Equipment ID": eq_choice, "Action": action, "Date": str(work_date),
+                            "Technician": technician.strip(), "Downtime Added (h)": added})
+                        pd.DataFrame(st.session_state["equipment"]).to_csv(equipment_file, index=False)   # save to csv
+                        st.session_state["maintenance_message"] = action + " recorded for " + eq_choice + "."
+                        st.rerun()
+
+            with log_tab:
+                if len(st.session_state["maintenance_log"]) > 0:
+                    st.dataframe(st.session_state["maintenance_log"], use_container_width=True)
+                else:
+                    st.info("No maintenance work has been logged yet.")
+
+    # g) Risk Assessment
     elif selected_page == "Risk Assessment":
         st.header("Risk Assessment")
-        st.info("The Risk Assessment session still needs to be added")   #add a code here
-            
+        st.write("Risk Score = Likelihood x Consequence (1-5 scale). 1-4 Low | 5-9 Medium | 10-16 High | 17-25 Critical")
+
+        with st.form("risk_form", clear_on_submit=True):
+            risk_id = st.text_input("Risk ID")
+            hazard = st.text_input("Hazard description")
+            likelihood = st.selectbox("Likelihood (1 = rare ... 5 = almost certain)", [1, 2, 3, 4, 5])
+            consequence = st.selectbox("Consequence (1 = minor ... 5 = catastrophic)", [1, 2, 3, 4, 5])
+            submitted_risk = st.form_submit_button("Record Risk Assessment")
+
+        if submitted_risk:
+            if risk_id.strip() == "":
+                st.error("Please enter the Risk ID.")
+            elif hazard.strip() == "":
+                st.error("Please describe the hazard.")
+            elif risk_id.strip() in [r["Risk ID"] for r in st.session_state["risks"]]:
+                st.error("This Risk ID already exists. Please enter another ID.")
+            else:
+                risk_score = likelihood * consequence       # RiskScore = Likelihood x Consequence
+
+                if risk_score <= 4:
+                    classification = "Low"
+                elif risk_score <= 9:
+                    classification = "Medium"
+                elif risk_score <= 16:
+                    classification = "High"
+                else:
+                    classification = "Critical"
+
+                st.session_state["risks"].append({"Risk ID": risk_id.strip(), "Hazard": hazard.strip(),
+                                                  "Likelihood": likelihood, "Consequence": consequence,
+                                                  "Risk Score": risk_score, "Classification": classification})
+
+                if classification == "Critical":
+                    st.error("CRITICAL RISK (score " + str(risk_score) + "). Immediate management attention is required.")
+                elif classification == "High":
+                    st.warning("HIGH RISK (score " + str(risk_score) + "). Additional controls are required.")
+                else:
+                    st.success("Risk recorded: score " + str(risk_score) + " (" + classification + ").")
+
+        st.subheader("Recorded Risk Assessments")
+        if len(st.session_state["risks"]) > 0:
+            st.dataframe(st.session_state["risks"], use_container_width=True)
+        else:
+            st.info("No risk assessments have been recorded yet.")
+        
+    # h) Alerts and Notifications
+    elif selected_page == "Alerts":
+        st.header("Alerts and Notifications")
+
+        alerts = []                  # each alert is a dictionary, like the worker and incident records
+        today = str(date.today())
+
+        # "page" is the list of sections this role can open, so each role only sees its own alerts
+        if "Equipment Data" in page:
+            for r in st.session_state["equipment"]:
+                downtime = float(r["Downtime (hours)"] or 0)
+                due_text = str(r["Next Maintenance Due"])
+
+                # High temperature and high vibration
+                for name, value, warning, critical in [("Temperature", float(r["Temperature (C)"] or 0), 80, 100),
+                                                       ("Vibration", float(r["Vibration (mm/s)"] or 0), 5, 8)]:
+                    if value > critical:
+                        alerts.append({"Level": "Critical", "Category": "High equipment " + name.lower(),
+                                       "ID": r["Equipment ID"], "Value": value,
+                                       "Action": "Inspect equipment and start maintenance/safety procedures."})
+                    elif value >= warning:
+                        alerts.append({"Level": "Warning", "Category": "High equipment " + name.lower(),
+                                       "ID": r["Equipment ID"], "Value": value,
+                                       "Action": "Monitor closely and schedule an inspection."})
+
+                # Overdue maintenance
+                overdue = r["Maintenance Status"] == "Overdue" or (due_text != "" and due_text < today)
+                if overdue and r["Maintenance Status"] != "Under Maintenance":
+                    alerts.append({"Level": "Critical", "Category": "Overdue maintenance", "ID": r["Equipment ID"],
+                                   "Value": "Due " + due_text, "Action": "Schedule maintenance immediately."})
+
+                # Excessive downtime
+                if downtime >= 500:
+                    alerts.append({"Level": "Warning", "Category": "Excessive equipment downtime", "ID": r["Equipment ID"],
+                                   "Value": str(downtime) + " hours", "Action": "Investigate causes of downtime."})
+
+        if "Worker Safety Data" in page:
+            for w in st.session_state["workers"]:
+                if w["PPE"] == "No":
+                    alerts.append({"Level": "Critical", "Category": "Low PPE compliance", "ID": w["Worker's ID"],
+                                   "Value": "Not wearing full PPE", "Action": "Stop work until full PPE is worn."})
+                if int(w["Fatigue Level"]) >= 8:
+                    alerts.append({"Level": "Warning", "Category": "High fatigue level", "ID": w["Worker's ID"],
+                                   "Value": str(w["Fatigue Level"]) + "/10", "Action": "Rest the worker or reassign duties."})
+                if w["Risk Level"] == "High":
+                    alerts.append({"Level": "Warning", "Category": "High-risk safety observation", "ID": w["Worker's ID"],
+                                   "Value": "High", "Action": "Investigate the safety observation."})
+
+        if "Safety Incidents" in page:
+            for i in st.session_state["incidents"]:
+                if i["Severity"] in ["High", "Critical"]:
+                    alerts.append({"Level": "Critical" if i["Severity"] == "Critical" else "Warning",
+                                   "Category": "Critical safety incident" if i["Severity"] == "Critical" else "High-severity safety incident",
+                                   "ID": i["Incident ID"], "Value": i["Severity"],
+                                   "Action": "Attend immediately and complete the investigation."})
+
+        if "Risk Assessment" in page:
+            for k in st.session_state["risks"]:
+                if k["Classification"] in ["High", "Critical"]:
+                    alerts.append({"Level": "Critical" if k["Classification"] == "Critical" else "Warning",
+                                   "Category": "High-risk assessment", "ID": k["Risk ID"],
+                                   "Value": "Score " + str(k["Risk Score"]), "Action": "Implement additional controls."})
+
+        alerts.sort(key=lambda a: a["Level"] != "Critical")      # critical alerts first
+
+        if len(alerts) == 0:
+            st.success("There are no active alerts.")
+        else:
+            critical = len([a for a in alerts if a["Level"] == "Critical"])
+            st.write("Active alerts:", len(alerts), "| Critical:", critical, "| Warning:", len(alerts) - critical)
+            st.dataframe(alerts, use_container_width=True)
+
+            # Full notification in the format of Figure 1 in the brief
+            number = st.selectbox("Select an alert to see the full notification", range(len(alerts)),
+                                  format_func=lambda n: str(alerts[n]["ID"]) + " - " + alerts[n]["Category"])
+            a = alerts[number]
+            line = "=" * 53
+            st.code(line + "\nMINING MONITORING ALERT\n" + line + "\n[" + a["Level"].upper() + "]\nID: " + str(a["ID"])
+                    + "\nIssue: " + a["Category"] + "\nValue: " + str(a["Value"])
+                    + "\nRecommended Action:\n " + a["Action"] + "\n" + line)
+
+
     elif selected_page == "General Reports":
         st.header("General Reports")
         st.write("Worker records:", len(st.session_state["workers"]))
