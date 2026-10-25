@@ -283,8 +283,8 @@ def by_id(eq, col):
 
 @st.cache_data
 def login_background():
-    """The login picture (logo + mine at sunrise) as base64; empty text if login_bg.jpeg is missing."""
-    path = os.path.join(BASE, "login_bg.jpeg")
+    """The login picture (logo + mine at sunrise) as base64; empty text if login_bg.jpg is missing."""
+    path = os.path.join(BASE, "login_bg.jpg")
     if not os.path.exists(path):
         return ""
     with open(path, "rb") as f:
@@ -723,7 +723,7 @@ def page_analysis(pages):
 # MAIN PROGRAM - the group's elif-chain style is kept (no function def for pages a to h).
 # Lines marked "FIX:" are the only changes made to the members' code.
 # =====================================================================
-picture = login_background()   # the login picture (empty text if login_bg.jpeg is missing)
+picture = login_background()   # the login picture (empty text if login_bg.jpg is missing)
 
 #initializing the state session before logging in.
 # (the data is already loaded from the csv files above, so the lists below only matter if a csv file is missing)
@@ -782,7 +782,7 @@ with open(USERS_FILE, mode="r", newline="") as file:   # open the users.csv file
 
 if not st.session_state["logged_in"]:
     # FIX: login page style - the logo picture fills the page and the form sits under the logo
-    background = (f"url(data:image/jpeg;base64,{picture}) center top/cover no-repeat" if picture else
+    background = (f"url(data:image/jpg;base64,{picture}) center top/cover no-repeat" if picture else
                   "radial-gradient(circle at 72% 58%,#ffd98a 0,#f59a45 4%,transparent 28%),"
                   "linear-gradient(#1c2a44 0,#6b5577 35%,#e8894a 57%,#2a2420 57.2%,#1A1D21 100%)")
     push_down = "calc(max(54.5vw,100vh)*.68)" if picture else "1.4rem"   # keeps the form just below the logo on any screen
